@@ -59,7 +59,22 @@
   }
 
   function sheetRows(wb, name) {
-    return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null, blankrows: true });
+    var ws = wb.Sheets[name];
+    if (!ws) return [];
+    var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: true });
+    // Excel 的错误值（#REF!、#DIV/0!）在 raw 模式下变成 null，和「空格子」分不清，
+    // 整行就被当成没有金额悄悄跳过。换成占位文字，后面按「读不出」报出来。
+    if (XLSX.utils.decode_cell) {
+      Object.keys(ws).forEach(function (addr) {
+        if (addr.charAt(0) === '!') return;
+        var cell = ws[addr];
+        if (!cell || cell.t !== 'e') return;
+        var pos = XLSX.utils.decode_cell(addr);
+        if (!rows[pos.r]) rows[pos.r] = [];
+        rows[pos.r][pos.c] = String(cell.w || '#错误值');
+      });
+    }
+    return rows;
   }
 
   /** 给每张表打分，挑最像科目余额表的那张 */
@@ -655,6 +670,7 @@
           return { code: b.code, name: b.name, srcRow: b.srcRow };
         }),
         skippedRows: state.bs.stats.skippedRows,
+        targetSkipped: (state.st && state.st.parsed && (state.st.parsed.badRows || []).length) || 0,
         level: state.bs.level || 'leaf',
         missing: (state.agg.missing || []).length
       },

@@ -15,7 +15,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.7.2';
+  var VERSION = '0.7.3';
 
   /* ============================================================
    * 一、基础工具
@@ -1165,7 +1165,8 @@
       (box.detail.failed && box.detail.failed.length) ||
       (box.detail.onlyDetail && box.detail.onlyDetail.length) ||
       (box.detail.onlyAgg && box.detail.onlyAgg.length));
-    var overallClean = box.cmp && box.cmp.clean && !skippedN && !detailBad;
+    var targetBad = box.targetSkipped || 0;
+    var overallClean = box.cmp && box.cmp.clean && !skippedN && !detailBad && !targetBad;
     var why = [];
     if (box.cmp) {
       if ((box.cmp.diffs || []).length) why.push('项目差异 ' + box.cmp.diffs.length + ' 项');
@@ -1177,6 +1178,7 @@
       if (missN) why.push('期末读不出 ' + missN + ' 个');
     }
     if (skippedN) why.push('原表有 ' + skippedN + ' 行没有计入');
+    if (targetBad) why.push('对方表有 ' + targetBad + ' 行没读到金额');
     if (detailBad) why.push('明细表勾稽有差异');
     if (box.bs && box.bs.identityFailed) why.push('另有 ' + box.bs.identityFailed + ' 行恒等式不平');
     var conclText = overallClean ? '全部勾平' : ('未勾平：' + why.join('，'));
@@ -1523,7 +1525,9 @@
 
     agg.items.forEach(function (it) {
       if (!used[normItem(it.item)]) {
-        onlyAgg.push({ item: it.item, cents: it.cents, accounts: it.accounts });
+        // 0 余额的项目没有明细表很正常，不能因此判「未勾平」；
+        // 而且全零的明细表会被当成「没有数字列」丢掉，这个缺口永远消不掉
+        if ((it.cents || 0) !== 0) onlyAgg.push({ item: it.item, cents: it.cents, accounts: it.accounts });
       }
     });
 

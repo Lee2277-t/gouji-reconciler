@@ -232,6 +232,26 @@ eq(pnm2.problems.length, 0, '也不该产生警告');
     '明细表缺项目时，界面结论也要说未勾平');
   ok(/明细表/.test(doc.getElementById('diffBox').innerHTML),
     '并且要说清是明细表的问题');
+
+console.log('\n[13 对方表读不到金额的行，要进底稿结论]');
+const out13 = Core.buildWorkbook(XLSX, {
+  client: '', dateText: '2026-11-22',
+  bs: { label: 'a', accountCount: 2, leafCount: 2, balanceDiffCents: 0, identityFailed: 0, identityChecked: 2, inferred: 0, missing: 0, skippedRows: 0, level: 'leaf' },
+  target: { label: 'b', blockName: '资产', colLabel: '审计前' },
+  targetSkipped: 1,
+  agg: { items: [], unmapped: [], missing: [] },
+  cmp: { diffs: [], matched: [], onlyAgg: [], onlyTarget: [], targetTotals: [], diffTotalCents: 0, unbalancedCents: 0, singleSideAbsCents: 0, singleSideCount: 0, clean: true, gapCount: 0 }
+});
+const gj13 = XLSX.utils.sheet_to_json(out13.wb.Sheets['勾稽表'], { header: 1, defval: null });
+const c13 = String((gj13.find(r => r[0] === '结论') || [])[4] || '');
+ok(/未勾平/.test(c13), '对方表有行读不到时，底稿不能写全部勾平：' + c13);
+ok(/对方表/.test(c13), '并且要说明是对方表的问题');
+
+console.log('\n[14 明细表：0 余额的项目不该造成「未勾平」]');
+const rec14 = Core.reconcileDetail([
+  { name: '应收账款', rows: [['项目', '金额'], ['合计', 300]], total: 300 }
+], { items: [{ item: '应收账款', cents: 300, accounts: [] }, { item: '长期待摊费用', cents: 0, accounts: [] }] }, { col: 1 });
+eq((rec14.onlyAgg || []).length, 0, '0 余额的项目不算「明细表里没有」');
   console.log('\n' + '='.repeat(56));
   if (fails.length) {
     console.log('失败 ' + fails.length + ' / ' + count + ' 项：');
