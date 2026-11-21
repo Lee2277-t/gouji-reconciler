@@ -15,7 +15,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.7.5';
+  var VERSION = '0.7.6';
 
   /* ============================================================
    * 一、基础工具

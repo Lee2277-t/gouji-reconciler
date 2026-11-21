@@ -800,7 +800,9 @@
   $('dtCol').addEventListener('change', function () {
     if (!state.dt) return;
     state.dt.colIndex = parseInt($('dtCol').value, 10);
-    renderDetail();
+    // 换列会改变明细勾稽结果，总结论也要跟着重算：
+    // 只 renderDetail() 的话，差异区还挂着上一列的「分毫不差」，导出却是未勾平
+    refresh();
   });
 
   $('stScope').addEventListener('change', function () {

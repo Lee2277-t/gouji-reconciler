@@ -303,6 +303,7 @@ const subShift = rowsShift.slice(want);
 const hSub = Core.detectBalanceHeader(subShift);
 eq(hSub.rowIndex, 0, '从第 3 行切片后，表头就在切片第 0 行');
 eq(hSub.codeCol, 0, '列也重新认出来了');
+
   console.log('\n' + '='.repeat(56));
   if (fails.length) {
     console.log('失败 ' + fails.length + ' / ' + count + ' 项：');
