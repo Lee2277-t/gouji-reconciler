@@ -110,6 +110,7 @@ detail     明细表勾稽全部通过：27 项断言
 limits     异常输入全部通过：41 项断言
 export     导出装配全部通过：34 项断言
 ui-smoke   界面冒烟全部通过：18 项断言
+real       跳过：没有设置 GOUJI_REAL_FILES
 全部通过，共 203 项断言
 ```
 
@@ -118,6 +119,13 @@ ui-smoke   界面冒烟全部通过：18 项断言
 - `limits.test.js` —— 空表、怪编码、坏金额、重复科目、脏数据导出
 - `export.test.js` —— 底稿四张表的结构、金额格式、文件名规则
 - `ui-smoke.test.js` —— 用假 DOM 加载真实的 `app.js`，点「示例数据」跑完整链路
+- `real.test.js` —— 拿本机真实底稿跑结构回归。客户路径通过环境变量给，不进仓库：
+
+```powershell
+$env:GOUJI_REAL_FILES = "余额表.xlsx;明细表.xlsx;试算表.xls"
+```
+
+不设置就自动跳过，别人 clone 下来不会红。
 
 核心逻辑（`core.js`）是纯函数，不碰 DOM，所以能直接在 Node 里测。
 

@@ -19,7 +19,7 @@ $node = Find-Exe $env:DSH_NODE "node"
 Write-Host "node: $node"
 Write-Host ""
 
-$suites = @("core", "detail", "limits", "export", "ui-smoke")
+$suites = @("core", "detail", "limits", "export", "ui-smoke", "real")
 $total = 0
 $failed = @()
 
@@ -27,7 +27,7 @@ foreach ($s in $suites) {
     $file = Join-Path $here "$s.test.js"
     $out = & $node $file 2>&1
     $code = $LASTEXITCODE
-    $line = ($out | Where-Object { $_ -match "全部通过|失败 " }) -join " "
+    $line = ($out | Where-Object { $_ -match "全部通过|失败 |跳过" }) -join " "
     if ($code -ne 0) {
         $failed += $s
         Write-Host ("  {0,-10} 失败" -f $s) -ForegroundColor Red
