@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>勾稽助手 — 科目余额表 ↔ 试算表 / 报表</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body class="mode-simple">
+
+<header>
+  <h1>勾稽助手</h1>
+  <div class="top">
+    <span class="muted">科目余额表 ↔ 试算表 / 报表，逐项对账</span>
+    <span class="ver">纯本地 · 不联网</span>
+  </div>
+  <p class="sub">
+    选左边的科目余额表 → 选右边的试算表或报表 → 看差异。全部计算在你这台电脑的浏览器里完成：<b>不联网、不上传、不留副本</b>。
+  </p>
+</header>
+
+<main>
+
+  <div class="modes">
+    <button class="mode on" id="modeSimple">简易</button>
+    <button class="mode" id="modeExpert">高级</button>
+    <span class="muted" id="modeHint">两步选文件，第三步看差异。认错了列再切高级。</span>
+  </div>
+
+  <!-- ============ 1 科目余额表 ============ -->
+  <section class="card">
+    <h2><span class="num">1</span>科目余额表</h2>
+
+    <div class="row">
+      <label class="file">
+        <input type="file" id="bsFile" accept=".xlsx,.xls,.xlsm,.csv">
+        <span class="btn">选择科目余额表</span>
+      </label>
+      <button class="btn ghost" id="demoBtn">没有文件？用示例数据试一下</button>
+    </div>
+    <p class="muted" id="bsInfo">客户导出的科目余额表 / 余额明细表。认列错可以在高级里改。</p>
+
+    <div class="note ok hidden" id="bsSummary"></div>
+
+    <div class="grid3 hidden expert-only" id="bsPanel">
+      <div class="field">
+        <label for="bsSheet">工作表</label>
+        <select id="bsSheet"></select>
+      </div>
+      <div class="field">
+        <label for="bsHeaderRow">表头所在行（Excel 行号）</label>
+        <div class="inline">
+          <input type="number" id="bsHeaderRow" min="1" step="1">
+          <button class="btn ghost" id="bsRedetect">重新识别</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="bsLevel">汇总口径</label>
+        <select id="bsLevel">
+          <option value="leaf">只算末级科目（推荐）</option>
+          <option value="top">只算上级科目</option>
+          <option value="all">全部科目（会重复计算）</option>
+        </select>
+        <small>上下级科目同时存在时，只算末级才不会翻倍。</small>
+      </div>
+    </div>
+
+    <table class="mapTable hidden expert-only" id="bsMapTable"></table>
+  </section>
+
+  <!-- ============ 2 试算表 / 报表 ============ -->
+  <section class="card">
+    <h2><span class="num">2</span>试算表 / 报表</h2>
+
+    <div class="row">
+      <label class="file">
+        <input type="file" id="stFile" accept=".xlsx,.xls,.xlsm,.csv">
+        <span class="btn">选择试算表或报表</span>
+      </label>
+      <span class="muted" id="stInfo">要跟科目余额表对比的那张表。</span>
+    </div>
+
+    <div class="note ok hidden" id="stSummary"></div>
+
+    <div class="grid3 hidden" id="stPanel">
+      <div class="field">
+        <label for="stSheet">工作表</label>
+        <select id="stSheet"></select>
+      </div>
+      <div class="field">
+        <label for="stBlock">哪一栏</label>
+        <select id="stBlock"></select>
+        <small>试算表常常把资产和负债并排写，分成两栏。</small>
+      </div>
+      <div class="field">
+        <label for="stCol">取哪一列金额</label>
+        <select id="stCol"></select>
+        <small>审计前 / 调整后 等。</small>
+      </div>
+      <div class="field">
+        <label for="stScope">对比范围</label>
+        <select id="stScope">
+          <option value="auto">自动（按这一栏的标题判断）</option>
+          <option value="all">全部科目</option>
+          <option value="资产">只比资产类</option>
+          <option value="负债">只比负债类</option>
+          <option value="权益">只比所有者权益类</option>
+          <option value="损益">只比损益类</option>
+        </select>
+        <small>只比这一类，负债权益才不会全被算成「单边项目」。</small>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3 差异 ============ -->
+  <section class="card">
+    <h2><span class="num">3</span>看差异</h2>
+
+    <div id="statsBox" class="stats"></div>
+
+    <div class="hidden expert-only" id="mapPanel">
+      <h3>给未映射的科目指定报表项目</h3>
+      <p class="hint">
+        一行一个，格式 <code>科目编码=报表项目</code>，例如 <code>1526=其他非流动资产</code>。
+        指定过的会自动记住，下次遇到同一个编码直接归位。
+      </p>
+      <textarea id="mapText" rows="4" placeholder="1526=其他非流动资产&#10;2601=长期借款"></textarea>
+      <div class="row">
+        <button class="btn ghost" id="mapApply">应用并记住</button>
+        <button class="btn ghost" id="mapForget">忘掉全部映射</button>
+        <span class="muted" id="mapHint"></span>
+      </div>
+    </div>
+
+    <div id="diffBox"></div>
+    <div id="unmappedBox"></div>
+
+    <div class="row" id="exportRow">
+      <button class="btn primary big" id="genBtn" disabled>生成勾稽底稿</button>
+      <span class="muted" id="genInfo"></span>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <span>勾稽助手 <span id="verText">v0.1</span> · AGPL-3.0 · 只做数据比对，不代替审计判断</span>
+</footer>
+
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
