@@ -120,12 +120,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File test\run-all.ps1
 ```
 core       全部通过：83 项断言
 fixes      审查修复回归全部通过：51 项断言
+fixes2     第二轮修复回归全部通过：44 项断言
 detail     明细表勾稽全部通过：27 项断言
 limits     异常输入全部通过：41 项断言
 export     导出装配全部通过：37 项断言
 ui-smoke   界面冒烟全部通过：19 项断言
 real       跳过：没有设置 GOUJI_REAL_FILES
-全部通过，共 258 项断言
+全部通过，共 302 项断言
 ```
 
 - `core.test.js` —— 金额、科目映射、汇总、比对、未映射、恒等式、两级表头解析、并排试算表切块

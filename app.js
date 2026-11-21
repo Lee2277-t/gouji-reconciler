@@ -124,11 +124,10 @@
 
   function loadBalanceSheet(file) {
     readWorkbook(file).then(function (res) {
-      if (!res.ok) { $('bsInfo').textContent = '读不了：' + res.error; return; }
+      if (!res.ok) { clearAll('读不了：' + res.error); return; }
       var pick = pickBalanceSheet(res.wb);
       if (!pick || pick.header.rowIndex < 0) {
-        $('bsInfo').textContent = '这个文件里找不到科目余额表的表头（要能认出「科目编码」「科目名称」「余额」）。';
-        state.bs = null; refresh();
+        clearAll('这个文件里找不到科目余额表的表头（要能认出「科目编码」「科目名称」「余额」）。判定不了的表不能硬算，上一份结果已清空。');
         return;
       }
       var opts = [];
@@ -212,11 +211,10 @@
 
   function loadStatement(file) {
     readWorkbook(file).then(function (res) {
-      if (!res.ok) { $('stInfo').textContent = '读不了：' + res.error; return; }
+      if (!res.ok) { clearStatement('读不了：' + res.error); return; }
       var pick = pickStatementSheet(res.wb);
       if (!pick) {
-        $('stInfo').textContent = '这个文件里找不到能当试算表/报表的表（要能认出「项目」和「金额」列）。';
-        state.st = null; refresh();
+        clearStatement('这个文件里找不到能当试算表/报表的表（要能认出「项目」和「金额」列）。');
         return;
       }
       var opts = [];
@@ -376,7 +374,13 @@
   function refresh() {
     if (!state.bs || !state.bs.parsed) {
       $('bsSummary').classList.add('hidden');
-      renderStats();
+      // 没有可用的余额表：把下游全部清掉，别让上一份的差异表留在屏幕上
+      state.agg = null;
+      state.cmp = null;
+      $('statsBox').innerHTML = '';
+      $('diffBox').innerHTML = '';
+      $('unmappedBox').innerHTML = '';
+      $('genBtn').disabled = true;
       return;
     }
     var s = state.bs.stats;
@@ -393,6 +397,12 @@
         (s.problems && s.problems.length ? '<br>原因：' + esc(s.problems.join('；')) : '') +
         '<br>请在高级里改「表头所在行」，或确认这张表有没有「期末余额/借方/贷方」这类列。';
       $('genBtn').disabled = true;
+      // 结论都下不了，下面那些差异表也必须清掉，否则红字上面还挂着绿色的「分毫不差」
+      state.agg = null;
+      state.cmp = null;
+      $('statsBox').innerHTML = '';
+      $('diffBox').innerHTML = '';
+      $('unmappedBox').innerHTML = '';
       return;
     }
 
@@ -479,7 +489,7 @@
           }).join('<br>') + ((d.accounts || []).length > 4 ? '<br>…共 ' + d.accounts.length + ' 个' : '') + '</td></tr>';
       });
       html += '</tbody></table></div>';
-    } else if (!cmp.singleSideCount && !(cmp.targetTotals || []).length) {
+    } else if (cmp.clean) {
       html += '<div class="note ok">所有项目都分毫不差。</div>';
     }
 
@@ -520,6 +530,22 @@
     var box = $('unmappedBox');
     if (!state.agg) { box.innerHTML = ''; return; }
     var un = state.agg.unmapped;
+    var miss = state.agg.missing || [];
+
+    // 期末读不出的科目：既没进项目、也没被当成 0，必须单独说
+    if (miss.length) {
+      box.innerHTML = '<h3>期末余额读不出的科目（' + miss.length + ' 个）</h3>' +
+        '<div class="note bad">这些科目<b>没有计入任何项目</b>——不是当 0 处理，是读不出来。' +
+        '请回原表看这几行的期末余额格。</div>' +
+        '<div class="scroll"><table class="data"><thead><tr>' +
+        '<th>科目编码</th><th>科目名称</th><th class="num">原始行号</th></tr></thead><tbody>' +
+        miss.slice(0, 30).map(function (m) {
+          return '<tr><td>' + esc(m.code) + '</td><td>' + esc(m.name) +
+            '</td><td class="num">' + esc(m.srcRow) + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+      return;
+    }
+
     if (!un.length) { box.innerHTML = '<div class="note ok">所有科目都归到报表项目了。</div>'; return; }
     var withMoney = un.filter(function (u) { return (u.signedCents || 0) !== 0; });
     var html = '<h3>未映射科目（' + un.length + ' 个，其中有余额的 ' + withMoney.length + ' 个）</h3>' +
@@ -553,14 +579,17 @@
     var today = new Date();
     function p2(n) { return String(n).padStart(2, '0'); }
     return {
-      client: '',
+      client: ($('clientName') && $('clientName').value.trim()) || '',
       dateText: today.getFullYear() + '-' + p2(today.getMonth() + 1) + '-' + p2(today.getDate()),
       bs: {
         label: state.bs.fileName + ' · ' + state.bs.sheetName,
         accountCount: state.bs.stats.accounts,
         leafCount: state.bs.stats.leaves,
         balanceDiffCents: state.bs.stats.bc.diffCents,
-        identityFailed: state.bs.stats.ic.failed
+        identityFailed: state.bs.stats.ic.failed,
+        identityChecked: state.bs.stats.ic.checked,
+        inferred: state.bs.stats.ic.inferred,
+        missing: (state.agg.missing || []).length
       },
       target: {
         label: state.st.fileName + ' · ' + state.st.sheetName,
@@ -716,7 +745,7 @@
       ['1601', null, '固定资产', null, '借', 500000, null, null, null, null, null, null, '借', 500000, null, null],
       ['1602', null, '累计折旧', null, '贷', 100000, null, null, null, null, null, null, '贷', 100000, null, null],
       ['2202', null, '应付账款', null, '贷', 200000, null, null, null, null, null, null, '贷', 200000, null, null],
-      ['4001', null, '实收资本', null, '贷', 1500000, null, null, null, null, null, null, '贷', 1500000, null, null],
+      ['4001', null, '实收资本', null, '贷', 1560000, null, null, null, null, null, null, '贷', 1560000, null, null],
       ['1526', null, '某专项资产', null, '借', 60000, null, null, null, null, null, null, '借', 60000, null, null]
     ];
     var st = [
@@ -727,8 +756,8 @@
       ['　应收账款', 2, 300000, null, null, null],
       ['　固定资产', 3, 400000, null, null, null],
       ['非流动资产：', null, null, '所有者权益：', null, null],
-      ['　其他非流动资产', 4, 60000, '　实收资本', 40, 1500000],
-      ['资产总计', 9, 1760000, '负债和所有者权益总计', 50, 1700000]
+      ['　其他非流动资产', 4, 60000, '　实收资本', 40, 1560000],
+      ['资产总计', 9, 1760000, '负债和所有者权益总计', 50, 1760000]
     ];
     function toWb(rows, name) {
       var wb = XLSX.utils.book_new();

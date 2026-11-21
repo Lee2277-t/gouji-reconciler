@@ -15,7 +15,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.3.0';
+  var VERSION = '0.4.0';
 
   /* ============================================================
    * 一、基础工具
@@ -247,10 +247,10 @@
 
   // 一级表头 → 内部字段前缀
   var GROUP_ALIASES = [
-    { key: 'opening', words: ['期初余额', '期初', '年初余额', '上期期末', '期初数'] },
-    { key: 'period', words: ['期间发生额', '本期发生额', '本期发生', '本期数', '发生额', '本期'] },
-    { key: 'year', words: ['累计发生额', '本年累计', '本年发生额', '累计发生', '年度累计'] },
-    { key: 'closing', words: ['期末余额', '期末', '本期期末', '期末数'] }
+    { key: 'opening', words: ['期初余额', '期初', '年初余额', '年初数', '年初', '上期期末', '期初数'] },
+    { key: 'period', words: ['期间发生额', '本期发生额', '本期发生', '本期数', '本期', '发生额'] },
+    { key: 'year', words: ['累计发生额', '本年累计', '本年发生额', '累计发生', '年度累计', '本年'] },
+    { key: 'closing', words: ['期末余额', '期末', '本期期末', '年末余额', '年末数', '年末', '期末数'] }
   ];
 
   function pickGroup(text) {
@@ -274,9 +274,10 @@
   function pickLeaf(text) {
     var t = norm(text);
     if (!t) return '';
-    if (/方向/.test(t)) return 'dir';
-    if (/借方/.test(t) || t === '借') return 'debit';
-    if (/贷方/.test(t) || t === '贷') return 'credit';
+    if (/方向/.test(t) || /^(借贷|借贷方)$/.test(t)) return 'dir';
+    // 「期初余额（借）」这种把方向塞在括号里的，按借方列处理
+    if (/借方|\(借\)$/.test(t) || t === '借') return 'debit';
+    if (/贷方|\(贷\)$/.test(t) || t === '贷') return 'credit';
     if (/金额|余额/.test(t)) return 'amount';
     return '';
   }
@@ -345,6 +346,8 @@
 
     // 一级表头向右填充（合并单元格只在首列有值）
     var lastGroup = '';
+    var unrecognized = [];
+    var conflictCols = [];
     var colCount = Math.max(topRow.length, subRow.length);
     for (var c2 = 0; c2 < colCount; c2++) {
       var g = pickGroup(topRow[c2]);
@@ -372,15 +375,33 @@
 
       // 方向列可能每组各有一个（期初有、期末也有），必须按组记，不能只留全局一个
       if (leaf === 'dir') {
-        if (lastGroup) columns[lastGroup].dir = c2;
+        if (lastGroup) {
+          if (columns[lastGroup].dir !== undefined && columns[lastGroup].dir !== c2) {
+            // 同一组两个方向列，后一个会盖掉前一个，必须说出来
+            conflictCols.push((c2 + 1) + ' 列的方向列与 ' + (columns[lastGroup].dir + 1) + ' 列重复');
+          }
+          columns[lastGroup].dir = c2;
+        }
         if (dirCol < 0) dirCol = c2;
         continue;
       }
       if (leaf === 'amount' && !lastGroup) { amountCol = c2; continue; }
-      if (!lastGroup || !leaf) continue;
+      if (!lastGroup || !leaf) {
+        // 有表头文字但一列都没认出来 —— 这一列的数据会被整列丢掉。
+        // 静默丢列是最危险的：少算还照样报「借贷平」。收集起来报给使用者。
+        var rawHead = span === 2 ? str(subRow[c2] || topRow[c2]) : str(topRow[c2]);
+        if (str(rawHead).trim() && !/账户代码|科目编码|科目代码|账户编号|科目编号|编码|名称/.test(norm(rawHead))) {
+          unrecognized.push((c2 + 1) + ' 列「' + str(rawHead).trim() + '」');
+        }
+        continue;
+      }
 
-      if (!columns[lastGroup][leaf] && columns[lastGroup][leaf] !== 0) {
+      if (columns[lastGroup][leaf] === undefined) {
         columns[lastGroup][leaf] = c2;
+      } else if (columns[lastGroup][leaf] !== c2) {
+        // 同组同类列出现两次（如「期末余额(借)」「期末余额(贷)」都被认成 amount），
+        // 后一个会被丢掉，金额直接少一半
+        conflictCols.push((c2 + 1) + ' 列与 ' + (columns[lastGroup][leaf] + 1) + ' 列都像「' + leaf + '」，只用了前者');
       }
     }
 
@@ -402,11 +423,13 @@
              columns[k].amount !== undefined;
     });
     if (!hasAnyAmount) problems.push('没找到金额列（借方/贷方/金额都没有）');
+    if (unrecognized.length) problems.push('这些列表头没认出来，整列没有参与计算：' + unrecognized.slice(0, 6).join('、') + (unrecognized.length > 6 ? ' 等' : ''));
+    if (conflictCols.length) problems.push('列冲突：' + conflictCols.slice(0, 4).join('；'));
 
     return {
       rowIndex: bestR, span: span, codeCol: codeCol, codeCol2: codeCol2, nameCol: nameCol,
       dirCol: dirCol, amountCol: amountCol, columns: columns, problems: problems,
-      hasAmountColumns: hasAnyAmount
+      hasAmountColumns: hasAnyAmount, unrecognized: unrecognized, conflicts: conflictCols
     };
   }
 
@@ -426,6 +449,20 @@
       if (c === undefined) return null;
       var v = toCents(row[c]);
       return v.cents;
+    }
+
+    // 先看期末这一组到底有没有填过数：整列空的表不能按「每行都是 0」处理
+    var closingGroupPre = cols.closing || {};
+    var closingColumnEmpty = false;
+    if (closingGroupPre.amount !== undefined || closingGroupPre.debit !== undefined || closingGroupPre.credit !== undefined) {
+      var filledPre = 0;
+      for (var rp = header.rowIndex + span; rp < rows.length; rp++) {
+        var rowp = rows[rp] || [];
+        [closingGroupPre.amount, closingGroupPre.debit, closingGroupPre.credit].forEach(function (cc) {
+          if (cc !== undefined && str(rowp[cc]).trim() !== '') filledPre++;
+        });
+      }
+      closingColumnEmpty = (filledPre === 0);
     }
 
     for (var r = header.rowIndex + span; r < rows.length; r++) {
@@ -454,7 +491,11 @@
 
       function dirOf(group) {
         var c = cols[group] && cols[group].dir;
-        if (c === undefined) return '';
+        // 组内没有方向列时退回全局方向列：
+        // 「科目编码|科目名称|方向|期初余额|本期借方|本期贷方|期末余额」只写了一个方向列，
+        // 它管的是整行的余额方向，不归任何一组。
+        if (c === undefined) c = header.dirCol;
+        if (c === undefined || c < 0) return '';
         return str(row[c]).trim();
       }
       /** 某组有没有出现（有方向列也算，因为「方向=平」就代表余额为 0） */
@@ -470,7 +511,8 @@
        */
       function signed(group) {
         if (!hasGroup(group)) return null;
-        var hasDir = cols[group] && cols[group].dir !== undefined;
+        var hasDir = (cols[group] && cols[group].dir !== undefined) ||
+                     (header.dirCol !== undefined && header.dirCol >= 0);
         var amtCol = cols[group] && cols[group].amount;
         var amtRaw = amtCol === undefined ? '' : str(row[amtCol]).trim();
         var amt = centsAt(group, 'amount', row);
@@ -504,7 +546,7 @@
       // 期末：有期末数就用；没填就用 期初 + 期间借 - 期间贷。
       // 注意：只有「确实有期间发生额列」时才敢推算。少了这个条件，
       // 一张只认出期初的表会把期初当期末，而借贷两边同时错、看上去还是平的。
-      var closing = signed('closing');
+      var closing = closingColumnEmpty ? null : signed('closing');
       var clRaw = '';
       if (cols.closing && cols.closing.amount !== undefined) clRaw = str(row[cols.closing.amount]).trim();
       var clWritten = clRaw !== '' && toCents(clRaw).cents === null;   // 写了东西但不是数字
@@ -512,7 +554,7 @@
         // 期末格写的是文字，不是空白。这时候推算等于把"读不出"粉饰成"读出来了"，
         // 宁可留空并报出来，让人回原表看那一格。
         badClosing++;
-      } else if (closing === null && opening !== null && hasGroup('period')) {
+      } else if (closing === null && opening !== null && hasGroup('period') && !closingColumnEmpty) {
         closing = opening + (pDr || 0) - (pCr || 0);
         closingInferred = true;
       }
@@ -543,6 +585,9 @@
     if (header.hasAmountColumns === false) problems.push('没有可用的金额列，这张表不能用来勾稽');
     if (badClosing) problems.push(badClosing + ' 行的期末余额写的是文字、读不成数字，这些行按「取不到」处理，没有推算');
     var withClosing = accounts.filter(function (a) { return a.closingCents !== null; }).length;
+    // 期末列整列都是空格子：每家 ERP 都可能这样（导出了列但没填），
+    // 这时每行都算成 0，借贷「平」得毫无意义
+    if (closingColumnEmpty) problems.push('「期末余额」这一组整列都是空的，没有取到任何期末数');
     if (accounts.length && !withClosing) problems.push('所有科目的期末余额都取不到，不能用来勾稽；请检查表头行是否选对了');
 
     return {
@@ -572,9 +617,20 @@
   function aggregateItems(accounts, opts) {
     opts = opts || {};
     var overrides = opts.overrides || {};
+    // 手工映射的方向要按「这个编码下所有科目合起来的净额」定一次。
+    // 逐科目各取各的方向会把借贷混向的往来放大两倍贷方金额（净 6000 算成 14000）。
+    var ovDirMap = {};
+    Object.keys(overrides).forEach(function (k) {
+      var net = 0;
+      accounts.forEach(function (a) {
+        if (codePrefix(a.code) === k) net += (a.creditCents || 0) - (a.debitCents || 0);
+      });
+      ovDirMap[k] = net >= 0 ? 'C' : 'D';
+    });
     var byItem = {};
     var order = [];
     var unmapped = [];
+    var missing = [];
     var total = 0;
 
     accounts.forEach(function (a) {
@@ -586,10 +642,25 @@
         var ovItem = ovRaw, ovDir = '';
         var mOv = /^(.*?)\s*[:：]\s*([CDcd])\s*$/.exec(ovRaw);
         if (mOv) { ovItem = mOv[1]; ovDir = mOv[2].toUpperCase(); }
-        var dir2 = ovDir || ((a.creditCents || 0) > (a.debitCents || 0) ? 'C' : 'D');
+        var dir2 = ovDir || ovDirMap[codePrefix(a.code)] || 'D';
         entry = { item: ovItem, dir: dir2, sign: 1, manual: true, manualDir: ovDir };
       } else {
         entry = mapAccount(a.code);
+        // 1231 是「坏账准备」总账科目，二级可能挂在不同往来上。
+        // 全部扣在应收账款上，会让应收账款少、其他应收款多，金额还互相抵消看不出来。
+        if (entry && entry.code === '1231' && /其他应收/.test(str(a.name))) {
+          entry = { code: '1231', item: '其他应收款', dir: 'C', sign: -1 };
+        } else if (entry && entry.code === '1231' && /应收票据/.test(str(a.name))) {
+          entry = { code: '1231', item: '应收票据', dir: 'C', sign: -1 };
+        }
+      }
+
+      // 只对「从余额表解析出来的行」判这一条：手工构造的科目可能只给借贷金额、没有期末字段
+      if (Object.prototype.hasOwnProperty.call(a, 'closingCents') && a.closingCents === null) {
+        // 期末余额读不出来：既不能当 0 汇总（那等于替真实数据判了 0），
+        // 也不能悄悄丢掉。单独列出来，让人回原表看那一行。
+        missing.push({ code: a.code, name: a.name, srcRow: a.srcRow });
+        return;
       }
 
       if (!entry) {
@@ -623,7 +694,8 @@
     items.sort(function (x, y) { return Math.abs(y.cents) - Math.abs(x.cents); });
     unmapped.sort(function (x, y) { return Math.abs(y.signedCents) - Math.abs(x.signedCents); });
 
-    return { items: items, unmapped: unmapped, total: total };
+    missing.sort(function (x, y) { return (x.srcRow || 0) - (y.srcRow || 0); });
+    return { items: items, unmapped: unmapped, missing: missing, total: total };
   }
 
   /* ============================================================
@@ -645,7 +717,12 @@
 
   /** 项目名归一：全角括号、空格、冒号都不算差别 */
   function normItem(name) {
-    var k = norm(name).replace(/^[-—－]+/, '');
+    // 报表里常带「一、」「减：」「其中：」这类前缀，去掉才能和科目侧的项目名对上
+    var raw = str(name).trim()
+      .replace(/^[一二三四五六七八九十]+[、.．]/, '')
+      .replace(/^(减|加|其中|内中)[:：]/, '')
+      .replace(/^[-—－]+/, '');
+    var k = norm(raw);
     return ITEM_ALIAS[k] || k;
   }
 
@@ -682,7 +759,7 @@
         if (!keep) return;
       }
       var k = normItem(it.item);
-      if (left[k] === undefined) { left[k] = it; leftOrder.push(k); }
+      if (left[k] === undefined) { left[k] = { item: it.item, cents: it.cents, accounts: it.accounts, cls: it.cls }; leftOrder.push(k); }
       else { left[k].cents += it.cents; }     // 同名项目合并（如「存货」来自多组科目）
     });
 
@@ -839,9 +916,15 @@
 
   /** 报表里的小计/合计行：不是项目，是表内加总 */
   function isStatementTotal(name) {
-    var t = str(name).replace(/[\s\u3000:：]/g, '');
-    return /^(流动|非流动)?(资产|负债|所有者权益|股东权益)?(合计|总计|小计)$/.test(t)
-      || /^(资产|负债)(和|及)(所有者权益|股东权益)(合计|总计)$/.test(t);
+    var t = str(name)
+      .replace(/[\s\u3000:：]/g, '')
+      .replace(/[（(][^）)]*[）)]/g, '')          // 去掉「（或股东权益）」这类括注
+      .replace(/^[一二三四五六七八九十]+、/, '')  // 去掉「一、二、」
+      .replace(/^(减|加|其中|内中)[:：]?/, '');    // 去掉「减：」「其中：」
+    if (/^(合计|总计|小计)$/.test(t)) return true;
+    if (/(合计|总计|小计)$/.test(t)) return true;
+    // 利润表的小计行不带「合计」二字
+    return /^(营业总收入|营业总成本|营业利润|利润总额|净利润|持续经营净利润|终止经营净利润|综合收益总额|其他综合收益的税后净额)$/.test(t);
   }
 
   /**
@@ -1039,6 +1122,15 @@
       un.push([u.code, u.name, (u.signedCents || 0) / 100, u.srcRow]);
     });
     if (!box.agg || !box.agg.unmapped.length) un.push(['（无）']);
+    // 期末余额读不出的科目：既没进项目、也没被当成 0，必须留痕
+    if (box.agg && box.agg.missing && box.agg.missing.length) {
+      un.push([]);
+      un.push(['期末余额读不出、没有计入任何项目的科目']);
+      un.push(['科目编码', '科目名称', '', '原始行号']);
+      box.agg.missing.forEach(function (m) {
+        un.push([m.code, m.name, '（读不出）', m.srcRow]);
+      });
+    }
     sheets.push({ name: '未映射科目', rows: un, moneyCols: [2] });
 
     /* ---- 单边项目 ---- */
@@ -1065,8 +1157,16 @@
       help.push(['借贷差额', moneyText(box.bs.balanceDiffCents),
         box.bs.balanceDiffCents === 0 ? '平' :
         '末级科目借贷不平。可能原因：这张表不含损益类科目，或含内部往来未抵销——先确认口径再勾稽']);
-      help.push(['恒等式不平的行数', box.bs.identityFailed,
-        box.bs.identityFailed ? '这些科目「期初+本期借-本期贷≠期末」，多半是列错位，需回原表核对' : '全部成立']);
+      var checkedN = box.bs.identityChecked;
+      if (checkedN === 0) {
+        help.push(['恒等式校验', '无法校验', '所有能比的期末余额都是推算出来的（推算值与公式天然一致），这类表不能拿恒等式当证据']);
+      } else {
+        help.push(['恒等式不平的行数', box.bs.identityFailed,
+          box.bs.identityFailed ? '这些科目「期初+本期借-本期贷≠期末」，多半是列错位，需回原表核对'
+            : ('参与校验 ' + checkedN + ' 行，全部成立')]);
+      }
+      if (box.bs.inferred) help.push(['期末余额为推算值的行数', box.bs.inferred, '这些行没有期末数可读，按「期初+本期借-本期贷」推出，不参与恒等式校验']);
+      if (box.bs.missing) help.push(['期末余额读不出的科目', box.bs.missing, '这些科目没有计入任何项目，在「未映射科目」页末尾列出']);
     }
     help.push([]);
     help.push(['怎么用这张底稿']);
