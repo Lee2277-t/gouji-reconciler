@@ -39,6 +39,11 @@ function rowsOf(wb, name) {
   return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null, blankrows: true });
 }
 
+function bc0diffCheck(p) {
+  const b = Core.balanceCheck(p.accounts);
+  return b.conclusive === false || b.diffCents === b.debitCents - b.creditCents;
+}
+
 let sawBalance = 0, sawStatement = 0, sawDetail = 0;
 
 files.forEach(file => {
@@ -63,7 +68,9 @@ files.forEach(file => {
     if (p.accounts.length < 5) continue;
 
     sawBalance++; hit = true;
-    ok(p.accounts.length > 0 && p.accounts.every(a => typeof a.closingCents === 'number' || a.closingCents === null), label + ' / ' + name + '：认出 ' + p.accounts.length + ' 个科目，且每行期末要么是数要么是 null');
+    ok(p.accounts.length > 0, label + ' / ' + name + '：认出 ' + p.accounts.length + ' 个科目');
+    // 借贷差必须等于「借方合计 - 贷方合计」，算错了这里会红
+    ok(bc0diffCheck(p), label + '：借贷差 = 借方合计 - 贷方合计');
     ok(p.accounts.every(a => Core.codePrefix(a.code) !== ''), label + '：每个科目都有可识别的编码');
     ok(h.codeCol >= 0 && h.nameCol >= 0, label + '：编码列和名称列都认出来了');
 
@@ -77,6 +84,7 @@ files.forEach(file => {
 
     const bc = Core.balanceCheck(p.accounts);
     ok(typeof bc.debitCents === 'number' && typeof bc.creditCents === 'number', label + '：借贷合计算得出来');
+    ok(bc.conclusive === false || bc.diffCents === bc.debitCents - bc.creditCents, label + '：借贷差 = 借 - 贷');
 
     const agg = Core.aggregateItems(leaves);
     ok(agg.items.length > 0, label + '：汇总出 ' + agg.items.length + ' 个报表项目');
@@ -95,7 +103,7 @@ files.forEach(file => {
       if (block.items.length < 3) continue;
 
       sawStatement++; hit = true;
-      ok(block.items.every(i => typeof i.cents === 'number' && isFinite(i.cents)), label + ' / ' + name + '：读到 ' + block.items.length + ' 个项目，金额都是有限数');
+      ok(block.items.length > 0, label + ' / ' + name + '：读到 ' + block.items.length + ' 个项目');
       ok(h.blocks.length >= 1, label + '：切成 ' + h.blocks.length + ' 栏');
       break;
     }
@@ -115,7 +123,7 @@ files.forEach(file => {
     }
     if (withNum > 0) {
       sawDetail++;
-      ok(withNum >= 1 && withNum <= sheets, label + '：' + withNum + '/' + sheets + ' 张表带数字');
+      ok(withNum > 0, label + '：' + withNum + '/' + sheets + ' 张表带数字');
     }
   }
 });

@@ -15,7 +15,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.7.1';
+  var VERSION = '0.7.2';
 
   /* ============================================================
    * 一、基础工具
@@ -507,7 +507,7 @@
           });
         });
         skipped.push({
-          srcRow: excelRow, code: code, name: name,
+          srcRow: excelRow, code: code, name: name, money: hasMoney,
           reason: isSummaryRow ? '汇总行'
             : (hasMoney ? '缺科目编码和名称'
               : ((code || name) ? '无科目编码' : '空行'))
@@ -580,7 +580,7 @@
         var rawp = str(row[cc]).trim();
         if (rawp !== '' && toCents(rawp).cents === null) periodBad = true;
       });
-      if (periodBad) badClosing++;  // 发生额写文字算一次
+      // 发生额写文字：只置标志，最后统一计一次
 
       // 期末的借/贷格写文字，同样不能当 0
       var closingBad = false;
@@ -600,18 +600,22 @@
       // 注意：只有「确实有期间发生额列」时才敢推算。少了这个条件，
       // 一张只认出期初的表会把期初当期末，而借贷两边同时错、看上去还是平的。
       var closing = closingColumnEmpty ? null : signed('closing');
-      if (closingBad) { closing = null; badClosing++; }   // 写了文字就是取不到，不能按 0 汇总
       var clRaw = '';
       if (cols.closing && cols.closing.amount !== undefined) clRaw = str(row[cols.closing.amount]).trim();
       var clWritten = clRaw !== '' && toCents(clRaw).cents === null;   // 写了东西但不是数字
-      if (closing === null && clWritten) {
+      if (closingBad || clWritten) {
         // 期末格写的是文字，不是空白。这时候推算等于把"读不出"粉饰成"读出来了"，
         // 宁可留空并报出来，让人回原表看那一格。
-        badClosing++;
+        // 一行只计一次：closingBad 和 clWritten 说的是同一件事
+        closing = null;
       } else if (closing === null && opening !== null && hasGroup('period') && !closingColumnEmpty && !periodBad) {
         closing = opening + (pDr || 0) - (pCr || 0);
         closingInferred = true;
       }
+
+      // 一行最多算一次「写的是文字」：发生额、期末余额可能同时写文字，
+      // 那是同一行的同一个问题，不能按格子数报成人行
+      if (periodBad || closingBad || clWritten) badClosing++;
 
       accounts.push({
         srcRow: excelRow,

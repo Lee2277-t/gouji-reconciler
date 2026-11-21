@@ -168,8 +168,9 @@
       ic: ic,
       // 有内容但没计入科目的行（编码取不出四位数字）：必须进结论，否则金额凭空消失
       // 合计/总计行是故意不参与的，不能算成「有行没计入」
+      // 口径跟 core 一致：只有「带金额但没归到科目」的行才会让合计对不上
       skippedRows: (state.bs.parsed.skipped || []).filter(function (r) {
-        return r.reason !== '汇总行' && r.reason !== '空行';
+        return r.money === true && r.reason !== '汇总行';
       }).length,
       problems: (state.bs.parsed.problems || []).concat(state.bs.header.problems || [])
     };
@@ -511,7 +512,11 @@
     var cmp = state.cmp;
     var skippedN = (state.bs.stats && state.bs.stats.skippedRows) || 0;
     var stBad = (state.st && state.st.parsed && (state.st.parsed.badRows || []).length) || 0;
-    var detailBad = state.detailCmp && ((state.detailCmp.diffs || []).length || (state.detailCmp.failed || []).length);
+    var detailBad = state.detailCmp && (
+      (state.detailCmp.diffs || []).length ||
+      (state.detailCmp.failed || []).length ||
+      (state.detailCmp.onlyDetail || []).length ||
+      (state.detailCmp.onlyAgg || []).length);
     if (!cmp.diffs.length && !cmp.matched.length && !cmp.singleSideCount) { box.innerHTML = '<p class="muted">没有可比的项目。</p>'; return; }
 
     var html = '<h3>差异（' + cmp.diffs.length + ' 项）</h3>';
@@ -535,6 +540,16 @@
       html += '</tbody></table></div>';
     } else if (cmp.clean && !skippedN && !detailBad && !stBad) {
       html += '<div class="note ok">所有项目都分毫不差。</div>';
+    } else if (!cmp.diffs.length) {
+      // 逐项没有差异，但整体不干净（明细表缺项目、原表丢行、单边……）：
+      // 必须说清是哪一类，否则用户看到「差异 0 项」会以为勾平了
+      var whyNot = [];
+      if (cmp.singleSideCount) whyNot.push('单边项目 ' + cmp.singleSideCount + ' 项');
+      if (skippedN) whyNot.push('原表有 ' + skippedN + ' 行没有计入');
+      if (stBad) whyNot.push('对方表有 ' + stBad + ' 行没有读到金额');
+      if (detailBad) whyNot.push('明细表这一级没勾平（见下方明细表结果）');
+      if (!whyNot.length && cmp.gapCount) whyNot.push('有未映射或读不出的科目');
+      html += '<div class="note warn">还没勾平：' + esc(whyNot.join('，') || '有未归入的项目') + '。</div>';
     }
 
     if (cmp.matched.length) {

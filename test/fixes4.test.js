@@ -199,6 +199,39 @@ ok(/未勾平/.test(c9), '明细表里缺项目时，主表结论不能写全部
 ok(/未勾平/.test(c9d), '明细页结论也要说未勾平');
 ok(!/全部勾平/.test(c9) && !/明细表全部勾平/.test(c9d), '两页不能一边说勾平一边不勾平');
 ok(/被审计单位/.test(JSON.stringify(dt9[0])), '明细表勾稽页也要有抬头');
+
+console.log('\n[10 一行文字只报一次（本期/期末/两处都写）]');
+[
+  ['本期借方文字', [['科目编码','科目名称','方向','期初余额','本期借方','本期贷方','期末余额'],['1002','银行存款','借',1000,'见附注',0,1200]]],
+  ['期末余额文字', [['科目编码','科目名称','方向','期初余额','本期借方','本期贷方','期末余额'],['1002','银行存款','借',1000,0,0,'见附注']]],
+  ['同一行两处文字', [['科目编码','科目名称','方向','期初余额','本期借方','期末余额'],['1002','银行存款','借',1000,'见附注','见附注']]]
+].forEach(function (c) {
+  const p = Core.parseBalanceRows(c[1], Core.detectBalanceHeader(c[1]), { firstExcelRow: 1 });
+  const m = /(\d+) 行的期末余额或发生额/.exec(p.problems.join(''));
+  ok(m && m[1] === '1', c[0] + '：一行只能报一行（实际 ' + (m ? m[1] : '没报') + '）');
+});
+
+console.log('\n[11 没有金额的行不进 skippedRows]');
+const noMoney2 = [
+  ['科目编码', '科目名称', '期末余额'],
+  ['1002', '银行存款', 1000],
+  ['—', '', ''],
+  ['4001', '实收资本', -1000]
+];
+const pnm2 = Core.parseBalanceRows(noMoney2, Core.detectBalanceHeader(noMoney2), { firstExcelRow: 1 });
+const moneyRows = (pnm2.skipped || []).filter(r => r.money === true && r.reason !== '汇总行');
+eq(moneyRows.length, 0, '没有金额的行不该算「有行没计入」');
+eq(pnm2.problems.length, 0, '也不该产生警告');
+
+  console.log('\n[12 界面：明细表只覆盖部分项目时首屏不能说「分毫不差」]');
+  await load('tFile', buf([
+    ['摘要', '金额'],
+    ['（合计）', 1000]
+  ], '货币资金'));
+  ok(!/分毫不差/.test(doc.getElementById('diffBox').innerHTML),
+    '明细表缺项目时，界面结论也要说未勾平');
+  ok(/明细表/.test(doc.getElementById('diffBox').innerHTML),
+    '并且要说清是明细表的问题');
   console.log('\n' + '='.repeat(56));
   if (fails.length) {
     console.log('失败 ' + fails.length + ' / ' + count + ' 项：');
