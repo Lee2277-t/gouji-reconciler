@@ -247,6 +247,86 @@
     return [v];
   }
 
+  /* ================= 明细表 ================= */
+
+  function loadDetail(file) {
+    readWorkbook(file).then(function (res) {
+      if (!res.ok) { $('dtInfo').textContent = '读不了：' + res.error; return; }
+      setDetail(res.fileName, res.wb);
+    });
+  }
+
+  /** 认明细表：只留带数字的工作表 */
+  function setDetail(fileName, wb) {
+    var sheets = [];
+    wb.SheetNames.forEach(function (name) {
+      var rows = sheetRows(wb, name);
+      var info = Core.detectDetailSheet(rows);
+      if (info.numericCols.length) sheets.push({ name: name, rows: rows, info: info });
+    });
+    if (!sheets.length) {
+      $('dtInfo').textContent = '这个文件里没有带数字的工作表，不像明细表。';
+      state.dt = null; refresh(); return;
+    }
+    state.dt = { fileName: fileName, sheets: sheets, colIndex: null };
+    $('dtPanel').classList.remove('hidden');
+    $('dtInfo').textContent = fileName + ' · ' + sheets.length + ' 张明细表';
+    renderDetailCols();
+    refresh();
+  }
+
+  /** 列选项：把所有表里出现过的数字列并起来，带表头文字和合计，方便认 */
+  function renderDetailCols() {
+    var cols = {};
+    state.dt.sheets.forEach(function (s) {
+      s.info.numericCols.forEach(function (c) {
+        if (!cols[c]) cols[c] = { col: c, label: (s.info.headers[c] || ''), sample: s.info.colSums[c] };
+      });
+    });
+    var list = Object.keys(cols).map(function (k) { return cols[k]; })
+      .sort(function (a, b) { return a.col - b.col; });
+    $('dtCol').innerHTML = list.map(function (c) {
+      return '<option value="' + c.col + '">第 ' + (c.col + 1) + ' 列' +
+        (c.label ? ' [' + esc(c.label) + ']' : '') + '</option>';
+    }).join('');
+    if (state.dt.colIndex !== null && cols[state.dt.colIndex]) $('dtCol').value = String(state.dt.colIndex);
+    else if (list.length) { state.dt.colIndex = list[0].col; $('dtCol').value = String(list[0].col); }
+  }
+
+  function renderDetail() {
+    var box = $('detailBox');
+    if (!state.dt || !state.agg) { box.innerHTML = ''; return; }
+    var rec = Core.reconcileDetail(state.dt.sheets, state.agg, { col: state.dt.colIndex });
+    state.detailCmp = rec;
+
+    var html = '<div class="stats">' +
+      '<div class="cell ok"><div class="k">对上</div><div class="v">' + rec.matched.length + '<span class="u"> 项</span></div></div>' +
+      '<div class="cell ' + (rec.diffs.length ? 'bad' : '') + '"><div class="k">对不上</div><div class="v">' + rec.diffs.length + '<span class="u"> 项</span></div></div>' +
+      '<div class="cell ' + (rec.failed.length ? 'warn' : '') + '"><div class="k">取不到金额</div><div class="v">' + rec.failed.length + '<span class="u"> 张表</span></div></div>' +
+      '</div>';
+
+    var show = rec.diffs.concat(rec.matched).slice(0, 60);
+    if (show.length) {
+      html += '<div class="scroll"><table class="data"><thead><tr>' +
+        '<th>工作表（报表项目）</th><th class="num">明细表合计</th><th class="num">科目余额表汇总</th>' +
+        '<th class="num">差异</th><th>取数</th></tr></thead><tbody>';
+      show.forEach(function (d) {
+        var cls = Math.abs(d.diffCents) > 0 ? ' class="diff"' : '';
+        html += '<tr' + cls + '><td>' + esc(d.item) + '</td>' +
+          '<td class="num">' + money(d.detailCents) + '</td>' +
+          '<td class="num">' + (d.aggCents === null ? '—' : money(d.aggCents)) + '</td>' +
+          '<td class="num"><b>' + (d.aggCents === null ? '—' : money(d.diffCents)) + '</b></td>' +
+          '<td class="muted">' + esc(d.source) + (d.totalRow ? '（第 ' + d.totalRow + ' 行）' : '') + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+    if (rec.failed.length) {
+      html += '<p class="hint">这几张表在这一列上没有数字：' +
+        rec.failed.slice(0, 8).map(function (f) { return esc(f.sheet); }).join('、') + '</p>';
+    }
+    box.innerHTML = html;
+  }
+
   /* ================= 刷新与渲染 ================= */
 
   function refresh() {
@@ -287,6 +367,7 @@
     renderStats();
     renderDiff();
     renderUnmapped();
+    renderDetail();
     renderMapPanel();
     $('genBtn').disabled = !(state.agg && state.cmp);
   }
@@ -489,6 +570,17 @@
     parseStatement(); refresh();
   });
 
+  $('dtFile').addEventListener('change', function (e) {
+    var f = e.target.files && e.target.files[0];
+    if (f) loadDetail(f);
+  });
+
+  $('dtCol').addEventListener('change', function () {
+    if (!state.dt) return;
+    state.dt.colIndex = parseInt($('dtCol').value, 10);
+    renderDetail();
+  });
+
   $('stScope').addEventListener('change', function () {
     refresh();
   });
@@ -581,6 +673,26 @@
     $('stPanel').classList.remove('hidden');
     renderStatementSelectors();
     parseStatement();
+
+    // 明细表：一个报表项目一张表，合计行中间带空格（真实导出就是这样）
+    var wbDt = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbDt, XLSX.utils.aoa_to_sheet([
+      ['某某公司 货币资金明细表'],
+      ['2026年6月30日'],
+      ['单位', '账号', '金额'],
+      ['工行基本户', '6222', 600000],
+      ['建行一般户', '4321', 400000],
+      ['合  计', null, 1000000]
+    ]), '货币资金');
+    XLSX.utils.book_append_sheet(wbDt, XLSX.utils.aoa_to_sheet([
+      ['某某公司 应收账款明细表'],
+      ['客户', '款项性质', '账面余额'],
+      ['甲公司', '货款', 200000],
+      ['乙公司', '货款', 100000],
+      ['合  计', null, 300000]
+    ]), '应收账款');
+    setDetail('示例-明细表.xlsx', wbDt);
+
     refresh();
   });
 

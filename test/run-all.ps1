@@ -19,7 +19,7 @@ $node = Find-Exe $env:DSH_NODE "node"
 Write-Host "node: $node"
 Write-Host ""
 
-$suites = @("core", "export", "ui-smoke")
+$suites = @("core", "detail", "limits", "export", "ui-smoke")
 $total = 0
 $failed = @()
 

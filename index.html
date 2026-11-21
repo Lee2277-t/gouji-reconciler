@@ -112,9 +112,38 @@
     </div>
   </section>
 
-  <!-- ============ 3 差异 ============ -->
+  <!-- ============ 3 明细表（可选） ============ -->
   <section class="card">
-    <h2><span class="num">3</span>看差异</h2>
+    <h2><span class="num">3</span>明细表<span class="muted" style="font-weight:400">（可选，做了就能三级勾稽）</span></h2>
+
+    <div class="row">
+      <label class="file">
+        <input type="file" id="dtFile" accept=".xlsx,.xls,.xlsm">
+        <span class="btn ghost">选择明细表</span>
+      </label>
+      <span class="muted" id="dtInfo">一个报表项目一张工作表的明细表。不选就只做两级。</span>
+    </div>
+
+    <div class="note ok hidden" id="dtSummary"></div>
+
+    <div class="grid3 hidden" id="dtPanel">
+      <div class="field">
+        <label for="dtCol">取哪一列金额</label>
+        <select id="dtCol"></select>
+        <small>明细表常有多个主体、多个口径各占一列，得你来认。</small>
+      </div>
+      <div class="field">
+        <label>取数方式</label>
+        <div class="muted" id="dtMethod" style="padding-top:7px">优先用「合计」行，没有就逐行相加</div>
+      </div>
+    </div>
+
+    <div id="detailBox"></div>
+  </section>
+
+  <!-- ============ 4 看差异 ============ -->
+  <section class="card">
+    <h2><span class="num">4</span>看差异</h2>
 
     <div id="statsBox" class="stats"></div>
 

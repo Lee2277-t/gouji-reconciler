@@ -15,7 +15,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.1.0';
+  var VERSION = '0.2.0';
 
   /* ============================================================
    * 一、基础工具
@@ -383,8 +383,8 @@
       // 全空行
       if (!code && !name && !row.join('').trim()) { skipped.push({ srcRow: excelRow, reason: '空行', code: '', name: '' }); continue; }
 
-      // 合计/汇总行：没有编码但有「合计」字样
-      if (!code && /合计|总计|小计|汇总/.test(name)) {
+      // 合计/汇总行：编码列或名称列写着「合计」的都算（有的表把合计写在编码列）
+      if (/合计|总计|小计|汇总/.test(code) || /合计|总计|小计|汇总/.test(name)) {
         skipped.push({ srcRow: excelRow, reason: '汇总行', code: code, name: name });
         continue;
       }
@@ -816,7 +816,7 @@
   }
 
   /* ============================================================
-   * 六、输出：勾稽底稿
+   * 七、输出：勾稽底稿
    * ============================================================ */
 
   /**
@@ -945,6 +945,181 @@
     return { wb: wb, fileName: fileName(box), sheetNames: sheets.map(function (s) { return s.name; }) };
   }
 
+  /* ============================================================
+   * 六、读明细表（一个报表项目一张工作表）
+   *
+   * 真实结构：`主要科目明细-XX.xlsx` 里每张表对应一个报表项目，
+   * 上面几行是标题，中间一行是表头，最后有一行「合  计」（中间带空格），
+   * 合计行下面还可能跟一行 check。
+   * ============================================================ */
+
+  var TOTAL_RE = /^(合计|小计|总计|合\s*计|小\s*计|总\s*计)$/;
+
+  function isTotalLabel(text) {
+    var t = str(text).replace(/[\s\u3000]/g, '');
+    return /^(合计|小计|总计)$/.test(t);
+  }
+
+  function isCheckLabel(text) {
+    var t = norm(text);
+    return /^check|核对|勾稽|验证/.test(t);
+  }
+
+  /**
+   * 认出一张明细表的结构：表头在第几行、有几列、有没有合计行。
+   * @returns {{headerIndex, width, totalRowIndex, colSums:[], numericCols:[]}}
+   */
+  function detectDetailSheet(rows) {
+    var width = 0;
+    rows.forEach(function (r) { if (r && r.length > width) width = r.length; });
+
+    // 表头：前 15 行里文字单元格最多的那一行（明细表的表头全是中文列名）
+    var headerIndex = -1, bestTexts = 0;
+    var limit = Math.min(rows.length, 15);
+    for (var r = 0; r < limit; r++) {
+      var texts = 0, nums = 0;
+      (rows[r] || []).forEach(function (v) {
+        if (typeof v === 'number') nums++;
+        else if (str(v).trim()) texts++;
+      });
+      if (texts >= 3 && texts > bestTexts && texts > nums) { bestTexts = texts; headerIndex = r; }
+    }
+
+    // 合计行：表头下面第一行带「合计」字样的
+    var totalRowIndex = -1;
+    for (var r2 = (headerIndex >= 0 ? headerIndex + 1 : 0); r2 < rows.length; r2++) {
+      var row = rows[r2] || [];
+      for (var c = 0; c < row.length; c++) {
+        if (isTotalLabel(row[c])) { totalRowIndex = r2; break; }
+      }
+      if (totalRowIndex >= 0) break;
+    }
+
+    // 每列求和：跳过表头以上、合计行、check 行
+    var colSums = new Array(width).fill(0);
+    var colCount = new Array(width).fill(0);
+    for (var r3 = (headerIndex >= 0 ? headerIndex + 1 : 0); r3 < rows.length; r3++) {
+      if (r3 === totalRowIndex) continue;
+      var row3 = rows[r3] || [];
+      if (isCheckLabel(row3[0])) continue;
+      var hasTotal = row3.some(isTotalLabel);
+      if (hasTotal) continue;
+      for (var c3 = 0; c3 < width; c3++) {
+        var v = toCents(row3[c3]);
+        if (v.cents !== null && v.cents !== 0) { colSums[c3] += v.cents; colCount[c3]++; }
+      }
+    }
+
+    var numericCols = [];
+    for (var i = 0; i < width; i++) if (colCount[i] > 0) numericCols.push(i);
+
+    // 列标题：表头行取文字；表头若是两级（下一行也全是文字），拼起来
+    var headers = [];
+    for (var h = 0; h < width; h++) {
+      var t1 = str((rows[headerIndex] || [])[h]).trim();
+      var t2 = str((rows[headerIndex + 1] || [])[h]).trim();
+      var nextIsText = (rows[headerIndex + 1] || []).filter(function (v) {
+        return typeof v !== 'number' && str(v).trim();
+      }).length >= 3;
+      headers.push(nextIsText && t2 && t2 !== t1 ? (t1 ? t1 + '·' + t2 : t2) : t1);
+    }
+
+    return {
+      headerIndex: headerIndex,
+      width: width,
+      totalRowIndex: totalRowIndex,
+      colSums: colSums,
+      numericCols: numericCols,
+      headers: headers
+    };
+  }
+
+  /**
+   * 从一张明细表里取出金额：优先用合计行的值，没有合计行就把明细加起来。
+   * @param col 用第几列（0 起）；不给就挑绝对值最大的数字列
+   */
+  function readDetailAmount(rows, info, col) {
+    info = info || detectDetailSheet(rows);
+    var useCol = col;
+    if (useCol === undefined || useCol === null) {
+      var best = -1, bestAbs = -1;
+      info.numericCols.forEach(function (c) {
+        var v = Math.abs(info.colSums[c]);
+        if (v > bestAbs) { bestAbs = v; best = c; }
+      });
+      useCol = best;
+    }
+    if (useCol < 0 || useCol >= info.width) {
+      return { cents: null, col: useCol, source: 'none', reason: '这一列没有数字' };
+    }
+
+    if (info.totalRowIndex >= 0) {
+      var tr = rows[info.totalRowIndex] || [];
+      var tv = toCents(tr[useCol]);
+      if (tv.cents !== null) {
+        return { cents: tv.cents, col: useCol, source: '合计行', totalRow: info.totalRowIndex + 1 };
+      }
+    }
+    if (info.colSums[useCol] === 0 && info.numericCols.indexOf(useCol) < 0) {
+      return { cents: null, col: useCol, source: 'none', reason: '这一列没有数字' };
+    }
+    return { cents: info.colSums[useCol], col: useCol, source: '明细相加' };
+  }
+
+  /**
+   * 明细表 ↔ 科目余额表汇总：按「工作表名 = 报表项目名」对上。
+   * @param sheets [{name, rows}]
+   * @param agg aggregateItems 的结果
+   * @param opts { col: 用到第几列, getInfo: 可选 }
+   */
+  function reconcileDetail(sheets, agg, opts) {
+    opts = opts || {};
+    var left = {};
+    agg.items.forEach(function (it) { left[normItem(it.item)] = it; });
+
+    var matched = [], diffs = [], onlyDetail = [], onlyAgg = [], failed = [];
+    var used = {};
+
+    sheets.forEach(function (s) {
+      var info = opts.getInfo ? opts.getInfo(s) : detectDetailSheet(s.rows);
+      var got = readDetailAmount(s.rows, info, opts.col);
+      if (got.cents === null) {
+        failed.push({ sheet: s.name, reason: got.reason || '取不到金额' });
+        return;
+      }
+      var key = normItem(s.name);
+      var target = left[key];
+      used[key] = true;
+      var row = {
+        item: s.name, detailCents: got.cents,
+        aggCents: target ? target.cents : null,
+        source: got.source, col: got.col,
+        totalRow: got.totalRow || null,
+        accounts: target ? target.accounts : []
+      };
+      if (!target) { onlyDetail.push(row); return; }
+      row.diffCents = got.cents - target.cents;
+      if (Math.abs(row.diffCents) <= (opts.toleranceCents || 0)) matched.push(row);
+      else diffs.push(row);
+    });
+
+    agg.items.forEach(function (it) {
+      if (!used[normItem(it.item)]) {
+        onlyAgg.push({ item: it.item, cents: it.cents, accounts: it.accounts });
+      }
+    });
+
+    diffs.sort(function (a, b) { return Math.abs(b.diffCents) - Math.abs(a.diffCents); });
+    onlyDetail.sort(function (a, b) { return Math.abs(b.detailCents) - Math.abs(a.detailCents); });
+    onlyAgg.sort(function (a, b) { return Math.abs(b.cents) - Math.abs(a.cents); });
+
+    return {
+      matched: matched, diffs: diffs, onlyDetail: onlyDetail, onlyAgg: onlyAgg, failed: failed,
+      sameCount: matched.length,
+      diffTotalCents: diffs.reduce(function (s, d) { return s + d.diffCents; }, 0)
+    };
+  }
+
   return {
     VERSION: VERSION,
     toCents: toCents, moneyText: moneyText, norm: norm, str: str,
@@ -952,6 +1127,7 @@
     detectBalanceHeader: detectBalanceHeader, parseBalanceRows: parseBalanceRows,
     balanceCheck: balanceCheck, identityCheck: identityCheck, leafAccounts: leafAccounts,
     detectStatementHeader: detectStatementHeader, parseStatementBlock: parseStatementBlock,
+    detectDetailSheet: detectDetailSheet, readDetailAmount: readDetailAmount, reconcileDetail: reconcileDetail, isTotalLabel: isTotalLabel,
     buildSheets: buildSheets, buildWorkbook: buildWorkbook, fileName: fileName,
     codePrefix: codePrefix, mapAccount: mapAccount,
     contribution: contribution, aggregateItems: aggregateItems,

@@ -130,6 +130,12 @@ ok(/1526/.test(unmapped), '未映射科目里要出现 1526');
 ok(/某专项资产/.test(unmapped), '未映射清单要带科目名称');
 ok(/其他非流动资产/.test(diff), '试算表独有的项目要能被识别出来');
 
+// 明细表这个第三级
+const dtBox = document.getElementById('detailBox').innerHTML;
+ok(/货币资金/.test(dtBox), '明细表结果里要出现货币资金');
+ok(/应收账款/.test(dtBox), '明细表结果里要出现应收账款');
+ok(/对上/.test(dtBox), '明细表这一级也要显示对上几项');
+
 // 导出按钮在两张表都就绪后应该可用
 ok(document.getElementById('genBtn').disabled === false, '两张表选好后「生成勾稽底稿」应可点');
 
