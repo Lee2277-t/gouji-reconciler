@@ -166,6 +166,10 @@
       leaves: leaves.length,
       bc: bc,
       ic: ic,
+      // 有内容但没计入科目的行（编码取不出四位数字）：必须进结论，否则金额凭空消失
+      skippedRows: (state.bs.parsed.skipped || []).filter(function (r) {
+        return (r.code && Core.str(r.code).trim()) || (r.name && Core.str(r.name).trim());
+      }).length,
       problems: (state.bs.parsed.problems || []).concat(state.bs.header.problems || [])
     };
     renderBsMap();
@@ -426,6 +430,21 @@
       (s.problems && s.problems.length ? '；注意：' + esc(s.problems.join('；')) : '') +
       '。';
 
+    // 恒等式对不上的行要指到具体哪一行，只说「有 1 行」没法查
+    if (s.ic.failed && (s.ic.bad || []).length) {
+      sum.innerHTML += '<div class="scroll" style="margin-top:8px"><table class="data"><thead><tr>' +
+        '<th>期初+本期借-本期贷≠期末的科目</th><th class="num">原始行号</th></tr></thead><tbody>' +
+        s.ic.bad.slice(0, 15).map(function (b) {
+          return '<tr><td>' + esc(b.code + ' ' + b.name) + '</td><td class="num">' + esc(b.srcRow) + '</td></tr>';
+        }).join('') +
+        '</tbody></table></div>' +
+        (s.ic.bad.length > 15 ? '<p class="muted">只列前 15 行，完整的在导出的底稿里。</p>' : '');
+    }
+    if (s.skippedRows) {
+      sum.innerHTML += '<div class="note bad" style="margin-top:8px">原表有 <b>' + s.skippedRows +
+        '</b> 行有内容但科目编码里取不出四位数字，这些行没有计入——金额不会凭空消失，但也没有归到科目上。请回原表核对。</div>';
+    }
+
     var accounts = currentAccounts();
     state.agg = Core.aggregateItems(accounts, { overrides: state.overrides });
 
@@ -479,6 +498,8 @@
     var box = $('diffBox');
     if (!state.cmp) { box.innerHTML = ''; return; }
     var cmp = state.cmp;
+    var skippedN = (state.bs.stats && state.bs.stats.skippedRows) || 0;
+    var detailBad = state.detailCmp && ((state.detailCmp.diffs || []).length || (state.detailCmp.failed || []).length);
     if (!cmp.diffs.length && !cmp.matched.length && !cmp.singleSideCount) { box.innerHTML = '<p class="muted">没有可比的项目。</p>'; return; }
 
     var html = '<h3>差异（' + cmp.diffs.length + ' 项）</h3>';
@@ -500,7 +521,7 @@
           }).join('<br>') + ((d.accounts || []).length > 4 ? '<br>…共 ' + d.accounts.length + ' 个' : '') + '</td></tr>';
       });
       html += '</tbody></table></div>';
-    } else if (cmp.clean) {
+    } else if (cmp.clean && !skippedN && !detailBad) {
       html += '<div class="note ok">所有项目都分毫不差。</div>';
     }
 
@@ -603,6 +624,11 @@
         identityFailed: state.bs.stats.ic.failed,
         identityChecked: state.bs.stats.ic.checked,
         inferred: state.bs.stats.ic.inferred,
+        identityBad: (state.bs.stats.ic.bad || []).map(function (b) {
+          return { code: b.code, name: b.name, srcRow: b.srcRow };
+        }),
+        skippedRows: state.bs.stats.skippedRows,
+        level: state.bs.level || 'leaf',
         missing: (state.agg.missing || []).length
       },
       target: {

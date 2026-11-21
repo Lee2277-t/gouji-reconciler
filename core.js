@@ -15,7 +15,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.5.0';
+  var VERSION = '0.6.0';
 
   /* ============================================================
    * 一、基础工具
@@ -35,6 +35,8 @@
    * @returns {{cents:number|null, reason:string|null, extra:boolean}}
    */
   function toCents(v) {
+    // 余额表里用「-」「—」表示 0 是极常见的写法，不能当成读不出
+    if (typeof v === 'string' && /^[-—–－]$/.test(v.trim())) return { cents: 0, text: true };
     if (v === null || v === undefined) return { cents: null, reason: 'empty', extra: false };
 
     if (typeof v === 'number') {
@@ -560,6 +562,18 @@
         if (rawp !== '' && toCents(rawp).cents === null) periodBad = true;
       });
       if (periodBad) badClosing++;
+
+      // 期末的借/贷格写文字，同样不能当 0
+      var closingBad = false;
+      ['debit', 'credit', 'amount'].forEach(function (k) {
+        var cc = cols.closing && cols.closing[k];
+        if (cc === undefined) return;
+        var rawc = str(row[cc]).trim();
+        if (rawc === '') return;
+        var cc2 = toCents(rawc);
+        if (cc2.cents === null && !cc2.text) closingBad = true;
+      });
+      if (closingBad) badClosing++;
       var yDr = centsAt('year', 'debit', row);
       var yCr = centsAt('year', 'credit', row);
 
@@ -879,7 +893,8 @@
       if (v > 0) dr += v; else cr += -v;
     });
     // 有行没取到期末余额时，「借贷平」只是「已取到的部分平」，不能当结论
-    var conclusive = valued > 0 && valued === leaves.length;
+    // 有部分行没取到数时仍然给结论，但把缺的行数报出来（clean 会因此不成立）
+    var conclusive = valued > 0;
     return {
       leafless: leaves.length,
       parentCount: accounts.length - leaves.length,
@@ -1068,6 +1083,8 @@
    *   agg, cmp, overrides
    * }
    */
+  var LEVEL_TEXT = { leaf: '只汇总末级科目', top: '只汇总上级科目', all: '全部科目都算（可能重复计）' };
+
   function buildSheets(box) {
     var sheets = [];
 
@@ -1109,7 +1126,18 @@
     rows.push(['差异合计（已匹配项目）', '', '', '', ((box.cmp ? box.cmp.diffTotalCents : 0) / 100), '']);
     rows.push(['单边差额（两边对冲后）', '', '', '', ((box.cmp ? box.cmp.unbalancedCents : 0) / 100), '']);
     rows.push(['单边项目绝对值合计', '', '', '', ((box.cmp ? box.cmp.singleSideAbsCents : 0) / 100), '']);
-    rows.push(['结论', '', '', '', box.cmp && box.cmp.clean ? '全部勾平' : '未勾平，见上表', '']);
+    // 总结论要把「被跳过的行」「明细表这一级」也算进去，否则分工表说勾平、
+    // 同一本底稿的明细表页却写着差异 10,000，自相矛盾
+    var skippedN = (box.bs && box.bs.skippedRows) || 0;
+    var detailBad = box.detail && ((box.detail.diffs && box.detail.diffs.length) || (box.detail.failed && box.detail.failed.length));
+    var overallClean = box.cmp && box.cmp.clean && !skippedN && !detailBad;
+    var why = [];
+    if (box.cmp && box.cmp.diffs && box.cmp.diffs.length) why.push('项目差异 ' + box.cmp.diffs.length + ' 项');
+    if (box.cmp && box.cmp.singleSideCount) why.push('单边项目 ' + box.cmp.singleSideCount + ' 项');
+    if (box.cmp && box.cmp.gapCount && !(box.cmp.diffs || []).length) why.push('未映射/读不出 ' + box.cmp.gapCount + ' 项');
+    if (skippedN) why.push('原表有 ' + skippedN + ' 行没有计入');
+    if (detailBad) why.push('明细表勾稽有差异');
+    rows.push(['结论', '', '', '', overallClean ? '全部勾平' : ('未勾平：' + why.join('，')), '']);
     sheets.push({ name: '勾稽表', rows: rows, moneyCols: moneyCols });
 
     /* ---- 明细表（三级勾稽） ---- */
@@ -1130,8 +1158,8 @@
         ]);
       };
       box.detail.diffs.forEach(pushDt);
-      box.detail.matched.forEach(pushDt);
-      if (box.detail.onlyDetail.length) {
+      (box.detail.matched || []).forEach(pushDt);
+      if ((box.detail.onlyDetail || []).length) {
         dt.push([]);
         dt.push(['明细表有、科目余额表没有的', '', '', '', '', '']);
         box.detail.onlyDetail.forEach(function (d) {
@@ -1145,13 +1173,18 @@
           dt.push([x.item, '', (x.cents || 0) / 100, '', '', '']);
         });
       }
-      if (box.detail.failed.length) {
+      if ((box.detail.failed || []).length) {
         dt.push([]);
         dt.push(['这一列上取不到金额的表', '', '', '', '', '']);
         box.detail.failed.forEach(function (f) { dt.push([f.sheet, '', '', '', f.reason || '', '']); });
       }
       dt.push([]);
       dt.push(['差异合计', '', '', ((box.detail.diffTotalCents || 0) / 100), '', '']);
+      // 这一页也要有自己的结论，否则上面几页说勾平、这里写着差异，没人知道该信哪个
+      var dClean = !(box.detail.diffs && box.detail.diffs.length) && !(box.detail.failed && box.detail.failed.length);
+      dt.push([]);
+      dt.push(['结论', '', '', '', dClean ? '明细表全部勾平'
+        : ('未勾平：' + ((box.detail.diffs || []).length) + ' 项差异、' + ((box.detail.failed || []).length) + ' 项单边'), '']);
       sheets.push({ name: '明细表勾稽', rows: dt, moneyCols: dtMoney });
     }
 
@@ -1170,6 +1203,15 @@
       un.push(['科目编码', '科目名称', '', '原始行号']);
       box.agg.missing.forEach(function (m) {
         un.push([m.code, m.name, '（读不出）', m.srcRow]);
+      });
+    }
+    // 恒等式对不上的行也要能定位到具体科目，README 一直这么承诺
+    if (box.bs && box.bs.identityBad && box.bs.identityBad.length) {
+      un.push([]);
+      un.push(['期初+本期借-本期贷≠期末的科目']);
+      un.push(['科目编码', '科目名称', '', '原始行号']);
+      box.bs.identityBad.forEach(function (b) {
+        un.push([b.code, b.name, '（恒等式不平）', b.srcRow]);
       });
     }
     sheets.push({ name: '未映射科目', rows: un, moneyCols: [2] });
@@ -1195,6 +1237,8 @@
     if (box.bs) {
       help.push(['科目数', box.bs.accountCount]);
       help.push(['末级科目数', box.bs.leafCount]);
+      help.push(['汇总口径', LEVEL_TEXT[box.bs.level] || LEVEL_TEXT.leaf,
+        '上下级同时存在时只算末级，避免重复计']);
       help.push(['借贷差额', moneyText(box.bs.balanceDiffCents),
         box.bs.balanceDiffCents === 0 ? '平' :
         '末级科目借贷不平。可能原因：这张表不含损益类科目，或含内部往来未抵销——先确认口径再勾稽']);

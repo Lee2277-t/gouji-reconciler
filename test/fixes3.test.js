@@ -39,15 +39,22 @@ const aggMis = Core.aggregateItems([
 const cmpMis = Core.compareItems(aggMis, [{ item: '货币资金', cents: 100000 }]);
 eq(cmpMis.clean, false, '有读不出的科目就不能说勾平');
 
-console.log('\n[3 借贷平衡：有行没取到数时不能报「平」]');
+console.log('\n[3 借贷平衡：有行没取到数时不锁死，但要把缺的行数报出来]');
 const bc1 = Core.balanceCheck([
   { code: '1002', name: '银行', closingCents: 100 },
   { code: '4001', name: '实收', closingCents: -100 },
   { code: '1526', name: '读不出', closingCents: null }
 ]);
-eq(bc1.conclusive, false, '有 null 行时不下结论');
-eq(bc1.balanced, null, 'balanced 必须是 null');
-eq(bc1.missingRows, 1, '报出几行没取到');
+eq(bc1.conclusive, true, '个别行读不出不该锁死整张表（真实底稿里很常见）');
+eq(bc1.missingRows, 1, '但要报出有几行没取到');
+eq(bc1.balanced, true, '已取到的部分确实是平的');
+// 但「勾平」这种总结论仍然不能给：
+const bcGap = Core.balanceCheck([
+  { code: '1002', name: '银行', closingCents: 100 },
+  { code: '4001', name: '实收', closingCents: -100 },
+  { code: '1526', name: '读不出', closingCents: null }
+]);
+eq(bcGap.missingRows, 1, '缺口行数留着，供 clean 判断');
 
 const bc2 = Core.balanceCheck([
   { code: '1002', name: '银行', closingCents: 100 },
@@ -66,7 +73,7 @@ eq(pt.accounts[0].closingCents, null, '发生额读不出时不许推算期末')
 eq(pt.accounts[0].closingInferred, false, '更不许把它标成推算');
 ok(pt.problems.some(p => /文字/.test(p)), '要报出来');
 
-console.log('\n[5 期末只部分行空着：不能当 0]');
+console.log('\n[5 期末只部分行空着：列里有数按 0，不能推算]');
 const part = [
   ['科目编码', '科目名称', '期初余额', '本期借方', '本期贷方', '期末余额'],
   ['1002', '银行存款', 1000, 0, 0, ''],
@@ -115,7 +122,7 @@ const blankHead = [
   ['1002', '银行存款', 1000, 0]
 ];
 const hbh = Core.detectBalanceHeader(blankHead);
-ok(hbh.unrecognized.some(u => /无表头/.test(u)) || hbh.conflicts.length > 0,
+ok(hbh.unrecognized.some(u => /无表头/.test(u)),
   '空表头列要么报未识别，要么报冲突');
 
 console.log('\n[9 「其中：」备查行不参与比对，不能和主项目相加]');
@@ -195,6 +202,13 @@ function xlsxBuffer(rows, sheetName) {
 }
 
 const bsInput = doc.getElementById('bsFile');
+const stInput = doc.getElementById('stFile');
+async function loadSt(buffer) {
+  nextPayload = buffer;
+  stInput.files = [{ name: 's.xlsx' }];
+  (stInput._h.change || []).forEach(fn => fn({ target: stInput }));
+  await new Promise(r => setTimeout(r, 60));
+}
 async function loadBs(buffer) {
   nextPayload = buffer;
   bsInput.files = [{ name: 'x.xlsx' }];
@@ -210,8 +224,18 @@ async function loadBs(buffer) {
     ['4001', '实收资本', 1000, 0, 0, 1500]
   ]));
   ok(/认出/.test(doc.getElementById('bsSummary').innerHTML), '成功载入后要显示结论');
-  ok(doc.getElementById('genBtn').disabled === false || true, '占位');
-  const hadStats = doc.getElementById('statsBox').innerHTML;
+  // 只有余额表、还没有对方表：不能导出（没东西可比）
+  ok(doc.getElementById('genBtn').disabled === true, '只载入余额表时不能导出');
+
+  // 再载入一张试算表：这时应该能导出
+  await loadSt(xlsxBuffer([
+    ['项目', '期末余额'],
+    ['货币资金', 1500],
+    ['实收资本', -1500]
+  ]));
+  ok(/认出/.test(doc.getElementById('bsSummary').innerHTML), '两边都载入后仍有结论');
+  ok(doc.getElementById('genBtn').disabled === false, '两边都有数据后导出按钮要能点');
+  ok(/差异/.test(doc.getElementById('diffBox').innerHTML) || /勾平/.test(doc.getElementById('diffBox').innerHTML), '差异区要渲染出来');
 
   // 再载入一个根本不是 Excel 的文件
   await loadBs(new Uint8Array([1, 2, 3, 4]));
@@ -235,7 +259,54 @@ ok(doc.getElementById('bsInfo').textContent.length > 5, '提示要说得清，�
   ]));
   ok(/认出/.test(doc.getElementById('bsSummary').innerHTML), '正常文件能恢复');
 
-  console.log('\n' + '='.repeat(56));
+  
+console.log('\n[12 破折号就是 0，不能让整张表锁死]');
+eq(Core.toCents('-').cents, 0, '一个短横');
+eq(Core.toCents('—').cents, 0, '破折号');
+eq(Core.toCents('--').cents, null, '两个短横不在约定里，仍算读不出');
+const dashRows = [
+  ['科目编码', '科目名称', '期初余额', '本期借方', '本期贷方', '期末余额'],
+  ['1002', '银行存款', 1000, 0, 0, '-'],
+  ['4001', '实收资本', 1000, 0, 0, 1000]
+];
+const hdash = Core.detectBalanceHeader(dashRows);
+const pdash = Core.parseBalanceRows(dashRows, hdash, { firstExcelRow: 1 });
+const bdash = Core.balanceCheck(pdash.accounts);
+eq(pdash.accounts[0].closingCents, 0, '短横读成 0');
+eq(bdash.conclusive, true, '不能因为一格短横就锁死整张表', );
+eq(bdash.missingRows, 0, '没有读不出的行');
+eq(bdash.balanced, false, '0 和 1000 确实不平，要如实报');
+
+console.log('\n[13 有行被跳过时不能算勾平]');
+const skippedRows = [
+  ['科目编码', '科目名称', '期末余额'],
+  ['1002', '银行存款', 1000],
+  ['', '其他应收款', 100],
+  ['4001', '实收资本', -1100]
+];
+const hsk = Core.detectBalanceHeader(skippedRows);
+const psk = Core.parseBalanceRows(skippedRows, hsk, { firstExcelRow: 1 });
+ok((psk.skipped || []).some(r => (r.name || '') === '其他应收款'), '被跳过的行要能查出来');
+ok(psk.problems.some(p => /四位数字/.test(p)), '要报出有几行没计入');
+
+console.log('\n[14 明细表有差异时，总底稿的结论不能写「全部勾平」]');
+const XLSX2 = require(path.join(__dirname, '..', 'vendor', 'xlsx.full.min.js'));
+const out2 = Core.buildWorkbook(XLSX2, {
+  client: '', dateText: '2026-11-22',
+  bs: { label: 'a', accountCount: 2, leafCount: 2, balanceDiffCents: 0, identityFailed: 0, identityChecked: 2, inferred: 0, missing: 0, skippedRows: 0, level: 'leaf' },
+  target: { label: 'b', blockName: '资产', colLabel: '审计前' },
+  agg: { items: [], unmapped: [], missing: [] },
+  cmp: { diffs: [], matched: [{ item: '货币资金', leftCents: 100, rightCents: 100, diffCents: 0 }], onlyAgg: [], onlyTarget: [], targetTotals: [], diffTotalCents: 0, unbalancedCents: 0, singleSideAbsCents: 0, singleSideCount: 0, clean: true, gapCount: 0 },
+  detail: { diffs: [{ item: '应收账款', sheet: '应收账款', bsCents: 300, detailCents: 310, diffCents: -10 }], matched: [], failed: [], onlyDetail: [], onlyAgg: [], duplicates: [] }
+});
+const gj2 = XLSX2.utils.sheet_to_json(out2.wb.Sheets['勾稽表'], { header: 1, defval: null });
+const concl2 = gj2.find(r => r[0] === '结论');
+ok(concl2, '勾稽表要有结论行');
+ok(/未勾平/.test(String(concl2[4])), '明细表有差异时总结论必须说未勾平');
+ok(/明细表/.test(String(concl2[4])), '并且要说是明细表的问题');
+const dt2 = XLSX2.utils.sheet_to_json(out2.wb.Sheets['明细表勾稽'], { header: 1, defval: null });
+ok(dt2.some(r => r[0] === '结论'), '明细表勾稽页也要有自己的结论');
+console.log('\n' + '='.repeat(56));
   if (fails.length) {
     console.log('失败 ' + fails.length + ' / ' + count + ' 项：');
     fails.forEach((f, i) => console.log('  ' + (i + 1) + '. ' + f));
