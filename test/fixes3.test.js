@@ -146,7 +146,7 @@ console.log('\n[11 界面：加载坏文件后必须清场（行为测试）]');
 function makeEl(id) {
   const h = {};
   return {
-    id, innerHTML: '', value: '', textContent: '', disabled: false, style: {}, files: null, _h: h,
+    id, innerHTML: '', value: '', textContent: '', disabled: false, style: {}, files: null, options: [], selectedIndex: -1, _h: h,
     classList: {
       _s: new Set(),
       add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); },

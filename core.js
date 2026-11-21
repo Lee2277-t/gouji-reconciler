@@ -15,7 +15,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.7.3';
+  var VERSION = '0.7.4';
 
   /* ============================================================
    * 一、基础工具
@@ -397,7 +397,15 @@
         // 有表头文字但一列都没认出来 —— 这一列的数据会被整列丢掉。
         // 静默丢列是最危险的：少算还照样报「借贷平」。收集起来报给使用者。
         var rawHead = span === 2 ? str(subRow[c2] || topRow[c2]) : str(topRow[c2]);
-        if (!str(rawHead).trim()) rawHead = '（无表头）';
+        if (!str(rawHead).trim()) {
+          // 整列一个数都没有的，是格式残留的空列，不是「没认出来」
+          var hasData = false;
+          for (var rr = bestR + span; rr < Math.min(rows.length, bestR + span + 200); rr++) {
+            if (str((rows[rr] || [])[c2]).trim() !== '') { hasData = true; break; }
+          }
+          if (!hasData) continue;
+          rawHead = '（无表头）';
+        }
         if (str(rawHead).trim() && !/账户代码|科目编码|科目代码|账户编号|科目编号|编码|名称/.test(norm(rawHead))) {
           unrecognized.push((c2 + 1) + ' 列「' + str(rawHead).trim() + '」');
         }
@@ -1306,6 +1314,7 @@
             : ('参与校验 ' + checkedN + ' 行，全部成立')]);
       }
       if (box.bs.inferred) help.push(['期末余额为推算值的行数', box.bs.inferred, '这些行没有期末数可读，按「期初+本期借-本期贷」推出，不参与恒等式校验']);
+      if (box.targetSkipped) help.push(['对方表没读到金额的行数', box.targetSkipped, '项目名读到了、金额是文字或 Excel 错误值（#REF! 等），这些行没有参与比对，见「单边项目」页']);
       if (box.bs.missing) help.push(['期末余额读不出的科目', box.bs.missing, '这些科目没有计入任何项目，在「未映射科目」页末尾列出']);
     }
     help.push([]);

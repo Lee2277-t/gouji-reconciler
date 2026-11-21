@@ -61,20 +61,26 @@
   function sheetRows(wb, name) {
     var ws = wb.Sheets[name];
     if (!ws) return [];
-    var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: true });
     // Excel 的错误值（#REF!、#DIV/0!）在 raw 模式下变成 null，和「空格子」分不清，
-    // 整行就被当成没有金额悄悄跳过。换成占位文字，后面按「读不出」报出来。
-    if (XLSX.utils.decode_cell) {
-      Object.keys(ws).forEach(function (addr) {
-        if (addr.charAt(0) === '!') return;
-        var cell = ws[addr];
-        if (!cell || cell.t !== 'e') return;
-        var pos = XLSX.utils.decode_cell(addr);
-        if (!rows[pos.r]) rows[pos.r] = [];
-        rows[pos.r][pos.c] = String(cell.w || '#错误值');
-      });
-    }
-    return rows;
+    // 整行就被当成没有金额悄悄跳过。这里先把错误格改写成文字，再读成数组——
+    // 顺序反了没用（数组里那格已经是 null）。
+    // 也不能用绝对行列号回填：sheet_to_json 按 !ref 压缩行列，非 A1 起点会整体错位。
+    Object.keys(ws).forEach(function (addr) {
+      if (addr.charAt(0) === '!') return;
+      var cell = ws[addr];
+      if (!cell || cell.t !== 'e') return;
+      cell.t = 's';
+      cell.v = String(cell.w || '#错误值');
+      delete cell.w;
+    });
+    return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: true });
+  }
+
+  /** 这张表的数据从 Excel 第几行开始（!ref 的起点），用来还原「原始行号」 */
+  function sheetOrigin(wb, name) {
+    var ws = wb.Sheets[name];
+    if (!ws || !ws['!ref'] || !XLSX.utils.decode_range) return 0;
+    try { return XLSX.utils.decode_range(ws['!ref']).s.r; } catch (e) { return 0; }
   }
 
   /** 给每张表打分，挑最像科目余额表的那张 */
@@ -157,7 +163,8 @@
 
       state.bs = {
         fileName: res.fileName, wb: res.wb, sheetName: pick.name,
-        rows: pick.rows, header: pick.header, parsed: null, level: 'leaf'
+        rows: pick.rows, header: pick.header, parsed: null, level: 'leaf',
+      origin: sheetOrigin(res.wb, pick.name)
       };
       // 面板一直带 hidden，之前没有任何地方移除它，等于换工作表/改表头行/改口径全用不了
       $('bsPanel').classList.remove('hidden');
@@ -171,7 +178,7 @@
   function parseBalance() {
     if (!state.bs) return;
     var h = state.bs.header;
-    state.bs.parsed = Core.parseBalanceRows(state.bs.rows, h, { firstExcelRow: 1 });
+    state.bs.parsed = Core.parseBalanceRows(state.bs.rows, h, { firstExcelRow: (state.bs.origin || 0) + 1 });
     var accounts = state.bs.parsed.accounts;
     var leaves = Core.leafAccounts(accounts);
     var bc = Core.balanceCheck(accounts);
@@ -223,7 +230,7 @@
     var kindName = { dir: '方向', amount: '金额', debit: '借方', credit: '贷方' };
     t.innerHTML = '<tr><th>编码列</th><th>名称列</th><th>表头行</th><th>识别到的金额列</th></tr>' +
       '<tr><td>' + (h.codeCol + 1) + ' 列</td><td>' + (h.nameCol + 1) + ' 列</td>' +
-      '<td>第 ' + (h.rowIndex + 1) + ' 行' + (h.span > 1 ? '（两级表头）' : '') + '</td>' +
+      '<td>第 ' + ((state.bs.origin || 0) + h.rowIndex + 1) + ' 行' + (h.span > 1 ? '（两级表头）' : '') + '</td>' +
       '<td>' + cols.map(function (c) {
         return c.group + '·' + kindName[c.kind] + '=第' + (c.col + 1) + '列';
       }).join('；') + '</td></tr>';
@@ -251,7 +258,8 @@
 
       state.st = {
         fileName: res.fileName, wb: res.wb, sheetName: pick.name,
-        rows: pick.rows, header: pick.header, blockIndex: 0, colIndex: 0, parsed: null
+        rows: pick.rows, header: pick.header, blockIndex: 0, colIndex: 0, parsed: null,
+      origin: sheetOrigin(res.wb, pick.name)
       };
       $('stInfo').textContent = res.fileName + ' · ' + pick.name;
       $('stPanel').classList.remove('hidden');
@@ -283,7 +291,7 @@
   function parseStatement() {
     if (!state.st) return;
     var r = Core.parseStatementBlock(state.st.rows, state.st.header,
-      state.st.blockIndex, state.st.colIndex, { firstExcelRow: 1 });
+      state.st.blockIndex, state.st.colIndex, { firstExcelRow: (state.st.origin || 0) + 1 });
     // 试算表里金额读不出、或项目名认不出的行：不能悄悄丢掉，要报到界面上
     // 空行和分区标题（「流动资产：」这种）本来就不该有金额，不是坏行
     r.badRows = (r.skipped || []).filter(function (s) {
@@ -670,10 +678,10 @@
           return { code: b.code, name: b.name, srcRow: b.srcRow };
         }),
         skippedRows: state.bs.stats.skippedRows,
-        targetSkipped: (state.st && state.st.parsed && (state.st.parsed.badRows || []).length) || 0,
         level: state.bs.level || 'leaf',
         missing: (state.agg.missing || []).length
       },
+      targetSkipped: (state.st && state.st.parsed && (state.st.parsed.badRows || []).length) || 0,
       target: {
         label: state.st.fileName + ' · ' + state.st.sheetName,
         blockName: (state.st.header.blocks[state.st.blockIndex] || {}).name || '',
@@ -686,7 +694,9 @@
         label: state.dt.fileName,
         col: state.dt.colIndex,
         colLabel: (function () {
-          var o = $('dtCol').options[$('dtCol').selectedIndex];
+          // 下拉可能还没填充或没有选中项，别让取个标题把整个导出搞挂
+          var el = $('dtCol');
+          var o = el && el.options ? el.options[el.selectedIndex] : null;
           return o ? o.textContent : '';
         })(),
         diffs: state.detailCmp.diffs,

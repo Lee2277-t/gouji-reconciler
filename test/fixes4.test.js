@@ -81,7 +81,7 @@ console.log('\n[6 摘要口径：明细表有差异时首屏差异区不能说�
 function makeEl(id) {
   const h = {};
   return {
-    id, innerHTML: '', value: '', textContent: '', disabled: false, style: {}, files: null, _h: h,
+    id, innerHTML: '', value: '', textContent: '', disabled: false, style: {}, files: null, options: [], selectedIndex: -1, _h: h,
     classList: {
       _s: new Set(),
       add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); },
@@ -252,6 +252,32 @@ const rec14 = Core.reconcileDetail([
   { name: '应收账款', rows: [['项目', '金额'], ['合计', 300]], total: 300 }
 ], { items: [{ item: '应收账款', cents: 300, accounts: [] }, { item: '长期待摊费用', cents: 0, accounts: [] }] }, { col: 1 });
 eq((rec14.onlyAgg || []).length, 0, '0 余额的项目不算「明细表里没有」');
+
+  console.log('\n[15 非 A1 起点 + #REF! 错误格：界面与底稿要一致]');
+  const wsErr = {
+    '!ref': 'B1:C3',
+    B1: { t: 's', v: '项目' }, C1: { t: 's', v: '金额' },
+    B2: { t: 's', v: '货币资金' }, C2: { t: 'n', v: 1000 },
+    B3: { t: 's', v: '其他非流动资产' }, C3: { t: 'e', v: 23, w: '#REF!' }
+  };
+  await load('stFile', new Uint8Array(XLSX.write({ SheetNames: ['ST'], Sheets: { ST: wsErr } }, { type: 'array', bookType: 'xlsx' })));
+  const stText = doc.getElementById('stSummary').innerHTML;
+  ok(/没有读到金额/.test(stText), '错误格要报到界面：' + stText.replace(/<[^>]+>/g, '').slice(0, 80));
+  ok(/还没勾平/.test(doc.getElementById('diffBox').innerHTML), '界面结论不能说勾平');
+  let written = null;
+  const realWrite = sandbox.XLSX.writeFile;
+  sandbox.XLSX.writeFile = function (wb) { written = wb; };
+  doc.getElementById('genBtn').click();
+  sandbox.XLSX.writeFile = realWrite;
+  ok(written, '导出要真的写出工作簿（genInfo：' + doc.getElementById('genInfo').textContent + '）');
+  if (written) {
+    const gj15 = XLSX.utils.sheet_to_json(written.Sheets['勾稽表'], { header: 1, defval: null });
+    const c15 = String((gj15.find(r => r[0] === '结论') || [])[4] || '');
+    ok(/未勾平/.test(c15), '底稿结论也要说未勾平：' + c15);
+    ok(/对方表/.test(c15), '底稿要指明是对方表的问题');
+    const help15 = XLSX.utils.sheet_to_json(written.Sheets['说明'], { header: 1, defval: null });
+    ok(help15.some(r => /对方表没读到/.test(String(r[0]))), '说明页要留痕');
+  }
   console.log('\n' + '='.repeat(56));
   if (fails.length) {
     console.log('失败 ' + fails.length + ' / ' + count + ' 项：');
