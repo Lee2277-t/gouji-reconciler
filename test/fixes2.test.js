@@ -64,14 +64,26 @@ ok(hs.unrecognized.some(u => /往来单位/.test(u)), '要收集没认出来的�
 ok(hs.problems.some(p => /没认出来/.test(p)), '并写进 problems');
 ok(hs.problems.some(p => /往来单位/.test(p)), 'problems 里要带列名');
 
-console.log('\n[5 同一组两列都像金额列：不能静默覆盖]');
+console.log('\n[5 括号里写方向：期初余额(借)/(贷) 要认成借方/贷方，不是两个金额列]');
 const dup = [
   ['科目编码', '科目名称', '期末余额(借)', '期末余额(贷)'],
   ['1002', '银行存款', 1500, 0]
 ];
 const hdup = Core.detectBalanceHeader(dup);
-ok(hdup.conflicts.length > 0, '要报列冲突');
-ok(hdup.problems.some(p => /列冲突/.test(p)), 'problems 里要有列冲突');
+eq(hdup.columns.closing.debit, 2, '借方向列');
+eq(hdup.columns.closing.credit, 3, '贷方向列');
+eq(hdup.conflicts.length, 0, '认对了就不会报冲突');
+const pdup = Core.parseBalanceRows(dup, hdup, { firstExcelRow: 1 });
+eq(pdup.accounts[0].closingCents, 150000, '银行存款期末 1500');
+
+console.log('\n[5b 同组两列都像金额列（没有方向括号）时仍要报冲突]');
+const dup2 = [
+  ['科目编码', '科目名称', '期末余额', '期末金额'],
+  ['1002', '银行存款', 1500, 0]
+];
+const hdup2 = Core.detectBalanceHeader(dup2);
+ok(hdup2.conflicts.length > 0, '两列都叫「余额/金额」时要报冲突');
+ok(hdup2.problems.some(p => /列冲突/.test(p)), 'problems 里要有列冲突');
 
 console.log('\n[6 标准资产负债表的合计行]');
 ['所有者权益（或股东权益）合计', '负债和所有者权益（或股东权益）总计',
@@ -197,10 +209,8 @@ try {
 } catch (e) {
   ok(false, '示例数据报错：' + e.message);
 }
-// 清场函数至少要被调用过：直接调用挂不上，改成检查源码里存在调用点
-ok(/clearAll\('/.test(appSrc) && (appSrc.match(/clearAll\('/g) || []).length >= 2, '读文件失败的分支必须真的调用 clearAll');
-ok((appSrc.match(/clearStatement\('/g) || []).length >= 2, '对方表失败的分支必须真的调用 clearStatement');
-ok(!/state\.bs = null; refresh\(\)/.test(appSrc), '不能再用「置空 + refresh」这种不清场的老写法');
+// 「失败清场」的真实行为在 fixes3.test.js 里用假 FileReader 验（加载坏文件 → 断言 DOM 被清空）。
+// 这里只确认 app.js 能加载、示例数据能点，不再用源码正则代替行为测试。
 
 console.log('\n' + '='.repeat(56));
 if (fails.length) {

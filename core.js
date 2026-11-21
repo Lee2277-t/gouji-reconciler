@@ -15,7 +15,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.4.0';
+  var VERSION = '0.5.0';
 
   /* ============================================================
    * 一、基础工具
@@ -272,6 +272,10 @@
    * 全等匹配会把它们整列丢掉，于是期初期末全空、还照样报「借贷平」。
    */
   function pickLeaf(text) {
+    var raw = str(text);
+    // 括号里写方向的（期初余额(借)）：norm 会把括号整个剥掉，必须在原文上看
+    if (/[（(]\s*借\s*[）)]/.test(raw)) return 'debit';
+    if (/[（(]\s*贷\s*[）)]/.test(raw)) return 'credit';
     var t = norm(text);
     if (!t) return '';
     if (/方向/.test(t) || /^(借贷|借贷方)$/.test(t)) return 'dir';
@@ -390,6 +394,7 @@
         // 有表头文字但一列都没认出来 —— 这一列的数据会被整列丢掉。
         // 静默丢列是最危险的：少算还照样报「借贷平」。收集起来报给使用者。
         var rawHead = span === 2 ? str(subRow[c2] || topRow[c2]) : str(topRow[c2]);
+        if (!str(rawHead).trim()) rawHead = '（无表头）';
         if (str(rawHead).trim() && !/账户代码|科目编码|科目代码|账户编号|科目编号|编码|名称/.test(norm(rawHead))) {
           unrecognized.push((c2 + 1) + ' 列「' + str(rawHead).trim() + '」');
         }
@@ -443,6 +448,7 @@
     var skipped = [];
     var problems = [];
     var badClosing = 0;
+    var noCodeRows = 0;
 
     function centsAt(group, kind, row) {
       var c = cols[group] && cols[group][kind];
@@ -486,6 +492,7 @@
       if (!code || codePrefix(code) === '') {
         // 有名称没编码、或编码里没有四位数字（如「总计」）：是标题/说明行，不是科目
         skipped.push({ srcRow: excelRow, reason: name ? '无科目编码' : '空行', code: code, name: name });
+        if (name || code) noCodeRows++;
         continue;
       }
 
@@ -528,8 +535,12 @@
         if (amtRaw !== '') return null;
         if (dr !== null || cr !== null) return (dr || 0) - (cr || 0);
         var d = dirOf(group);
-        if (d && !/借|贷/.test(d)) return 0;      // 「平」「无」等 = 零余额
-        if (!d) return 0;                          // 没有方向列，也没有金额 = 空行
+        // 有方向列、写着「平」——这才是确定的零
+        if (d && !/借|贷/.test(d)) return 0;
+        // 既没金额、又没方向列：
+        // 期末列别处有数、这格空着 —— 这是「余额为 0」的常见写法；
+        // 整列都空 —— 那是列没填，属于「不知道」。
+        if (!d) return (hasDir || !closingColumnEmpty) ? 0 : null;
         return null;                               // 写着借/贷却没金额：推出来再说
       }
 
@@ -540,6 +551,15 @@
 
       var pDr = centsAt('period', 'debit', row);
       var pCr = centsAt('period', 'credit', row);
+      // 发生额格写了文字（「见附注」「待补」）：这行不能算，也不能拿 0 去推期末
+      var periodBad = false;
+      ['debit', 'credit'].forEach(function (k) {
+        var cc = cols.period && cols.period[k];
+        if (cc === undefined) return;
+        var rawp = str(row[cc]).trim();
+        if (rawp !== '' && toCents(rawp).cents === null) periodBad = true;
+      });
+      if (periodBad) badClosing++;
       var yDr = centsAt('year', 'debit', row);
       var yCr = centsAt('year', 'credit', row);
 
@@ -554,7 +574,7 @@
         // 期末格写的是文字，不是空白。这时候推算等于把"读不出"粉饰成"读出来了"，
         // 宁可留空并报出来，让人回原表看那一格。
         badClosing++;
-      } else if (closing === null && opening !== null && hasGroup('period') && !closingColumnEmpty) {
+      } else if (closing === null && opening !== null && hasGroup('period') && !closingColumnEmpty && !periodBad) {
         closing = opening + (pDr || 0) - (pCr || 0);
         closingInferred = true;
       }
@@ -583,7 +603,8 @@
     if (!accounts.length) problems.push('表头下面没有读到科目行');
     // 金额列一个都没认出来，或者一个期末余额都算不出来：这张表不能用来勾稽
     if (header.hasAmountColumns === false) problems.push('没有可用的金额列，这张表不能用来勾稽');
-    if (badClosing) problems.push(badClosing + ' 行的期末余额写的是文字、读不成数字，这些行按「取不到」处理，没有推算');
+    if (badClosing) problems.push(badClosing + ' 行的期末余额或发生额写的是文字、读不成数字，这些行按「取不到」处理，没有推算');
+    if (noCodeRows) problems.push(noCodeRows + ' 行有内容但科目编码里取不出四位数字，这些行没有计入（金额没有消失，只是没归到科目上，请核对）');
     var withClosing = accounts.filter(function (a) { return a.closingCents !== null; }).length;
     // 期末列整列都是空格子：每家 ERP 都可能这样（导出了列但没填），
     // 这时每行都算成 0，借贷「平」得毫无意义
@@ -720,7 +741,7 @@
     // 报表里常带「一、」「减：」「其中：」这类前缀，去掉才能和科目侧的项目名对上
     var raw = str(name).trim()
       .replace(/^[一二三四五六七八九十]+[、.．]/, '')
-      .replace(/^(减|加|其中|内中)[:：]/, '')
+      .replace(/^(减|加)[:：]/, '')
       .replace(/^[-—－]+/, '');
     var k = norm(raw);
     return ITEM_ALIAS[k] || k;
@@ -806,8 +827,14 @@
       singleSideAbsCents: onlyAgg.reduce(function (s, x) { return s + Math.abs(x.cents); }, 0) +
                           onlyTarget.reduce(function (s, x) { return s + Math.abs(x.cents); }, 0),
       singleSideCount: onlyAgg.length + onlyTarget.length,
-      // 全对上（既没有差异，也没有单边）才是真的干净
+      // 「干净」= 没有差异、没有单边，**并且**没有未映射科目、没有期末读不出的科目。
+      // 只看差异和单边，会在有明显缺口时说「全部勾平」——这是最误导人的假结论。
       clean: diffs.length === 0 && onlyAgg.length === 0 && onlyTarget.length === 0
+        && !(agg.unmapped && agg.unmapped.length)
+        && !(agg.missing && agg.missing.length),
+      gapCount: (onlyAgg.length + onlyTarget.length +
+        ((agg.unmapped && agg.unmapped.length) || 0) +
+        ((agg.missing && agg.missing.length) || 0))
     };
   }
 
@@ -851,7 +878,8 @@
       valued++;
       if (v > 0) dr += v; else cr += -v;
     });
-    var conclusive = valued > 0;
+    // 有行没取到期末余额时，「借贷平」只是「已取到的部分平」，不能当结论
+    var conclusive = valued > 0 && valued === leaves.length;
     return {
       leafless: leaves.length,
       parentCount: accounts.length - leaves.length,
@@ -860,7 +888,8 @@
       creditCents: cr,
       diffCents: dr - cr,
       balanced: conclusive ? (dr === cr) : null,
-      conclusive: conclusive
+      conclusive: conclusive,
+      missingRows: leaves.length - valued
     };
   }
 
@@ -916,15 +945,20 @@
 
   /** 报表里的小计/合计行：不是项目，是表内加总 */
   function isStatementTotal(name) {
+    // 「其中：xx」是备查行，和主项目并列相加会算重，先按原始文字判掉
+    if (/^其中/.test(str(name).replace(/[\s\u3000]/g, ''))) return true;
     var t = str(name)
       .replace(/[\s\u3000:：]/g, '')
       .replace(/[（(][^）)]*[）)]/g, '')          // 去掉「（或股东权益）」这类括注
-      .replace(/^[一二三四五六七八九十]+、/, '')  // 去掉「一、二、」
+      .replace(/^[一二三四五六七八九十]+[、.．]/, '')  // 去掉「一、」「二.」
       .replace(/^(减|加|其中|内中)[:：]?/, '');    // 去掉「减：」「其中：」
     if (/^(合计|总计|小计)$/.test(t)) return true;
     if (/(合计|总计|小计)$/.test(t)) return true;
     // 利润表的小计行不带「合计」二字
-    return /^(营业总收入|营业总成本|营业利润|利润总额|净利润|持续经营净利润|终止经营净利润|综合收益总额|其他综合收益的税后净额)$/.test(t);
+    if (/^(营业总收入|营业总成本|营业利润|利润总额|净利润|持续经营净利润|终止经营净利润|综合收益总额|其他综合收益的税后净额|归属于母公司股东的净利润|归属于母公司所有者的净利润|少数股东损益)$/.test(t)) return true;
+    // 「其中：应收账款」是备查行，与主项目并列相加会算重
+    if (/^其中/.test(t)) return true;
+    return false;
   }
 
   /**
@@ -1102,6 +1136,13 @@
         dt.push(['明细表有、科目余额表没有的', '', '', '', '', '']);
         box.detail.onlyDetail.forEach(function (d) {
           dt.push([d.item, (d.detailCents || 0) / 100, '', '', d.source || '', '']);
+        });
+      }
+      if (box.detail.onlyAgg && box.detail.onlyAgg.length) {
+        dt.push([]);
+        dt.push(['科目余额表有、明细表没有的', '', '', '', '', '']);
+        box.detail.onlyAgg.forEach(function (x) {
+          dt.push([x.item, '', (x.cents || 0) / 100, '', '', '']);
         });
       }
       if (box.detail.failed.length) {

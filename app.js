@@ -145,8 +145,9 @@
         rows: pick.rows, header: pick.header, parsed: null, level: 'leaf'
       };
       // 面板一直带 hidden，之前没有任何地方移除它，等于换工作表/改表头行/改口径全用不了
-      bsPanel.classList.remove('hidden');
+      $('bsPanel').classList.remove('hidden');
       $('bsHeaderRow').value = pick.header.rowIndex + 1;
+      $('bsInfo').textContent = res.fileName + ' · ' + pick.name;
       parseBalance();
       refresh();
     });
@@ -231,6 +232,7 @@
         fileName: res.fileName, wb: res.wb, sheetName: pick.name,
         rows: pick.rows, header: pick.header, blockIndex: 0, colIndex: 0, parsed: null
       };
+      $('stInfo').textContent = res.fileName + ' · ' + pick.name;
       $('stPanel').classList.remove('hidden');
       renderStatementSelectors();
       parseStatement();
@@ -362,6 +364,14 @@
       });
       html += '</tbody></table></div>';
     }
+    if (rec.onlyAgg.length) {
+      html += '<h3>科目余额表有、明细表没有的（' + rec.onlyAgg.length + ' 项）</h3>' +
+        '<div class="note warn">这些项目在明细表里找不到同名的工作表。可能是没做明细，也可能是工作表名不一样。</div>' +
+        '<div class="scroll"><table class="data"><thead><tr><th>项目</th><th class="num">科目余额表汇总</th></tr></thead><tbody>' +
+        rec.onlyAgg.slice(0, 30).map(function (x) {
+          return '<tr><td>' + esc(x.item) + '</td><td class="num">' + money(x.cents) + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+    }
     if (rec.failed.length) {
       html += '<p class="hint">这几张表在这一列上没有数字：' +
         rec.failed.slice(0, 8).map(function (f) { return esc(f.sheet); }).join('、') + '</p>';
@@ -403,6 +413,7 @@
       $('statsBox').innerHTML = '';
       $('diffBox').innerHTML = '';
       $('unmappedBox').innerHTML = '';
+      $('detailBox').innerHTML = '';
       return;
     }
 
@@ -468,7 +479,7 @@
     var box = $('diffBox');
     if (!state.cmp) { box.innerHTML = ''; return; }
     var cmp = state.cmp;
-    if (!cmp.diffs.length && !cmp.matched.length) { box.innerHTML = '<p class="muted">没有可比的项目。</p>'; return; }
+    if (!cmp.diffs.length && !cmp.matched.length && !cmp.singleSideCount) { box.innerHTML = '<p class="muted">没有可比的项目。</p>'; return; }
 
     var html = '<h3>差异（' + cmp.diffs.length + ' 项）</h3>';
     if (!cmp.diffs.length && cmp.singleSideCount) {
@@ -533,8 +544,9 @@
     var miss = state.agg.missing || [];
 
     // 期末读不出的科目：既没进项目、也没被当成 0，必须单独说
+    var missHtml = '';
     if (miss.length) {
-      box.innerHTML = '<h3>期末余额读不出的科目（' + miss.length + ' 个）</h3>' +
+      missHtml = '<h3>期末余额读不出的科目（' + miss.length + ' 个）</h3>' +
         '<div class="note bad">这些科目<b>没有计入任何项目</b>——不是当 0 处理，是读不出来。' +
         '请回原表看这几行的期末余额格。</div>' +
         '<div class="scroll"><table class="data"><thead><tr>' +
@@ -543,10 +555,12 @@
           return '<tr><td>' + esc(m.code) + '</td><td>' + esc(m.name) +
             '</td><td class="num">' + esc(m.srcRow) + '</td></tr>';
         }).join('') + '</tbody></table></div>';
-      return;
     }
 
-    if (!un.length) { box.innerHTML = '<div class="note ok">所有科目都归到报表项目了。</div>'; return; }
+    if (!un.length) {
+      box.innerHTML = missHtml + (miss.length ? '' : '<div class="note ok">所有科目都归到报表项目了。</div>');
+      return;
+    }
     var withMoney = un.filter(function (u) { return (u.signedCents || 0) !== 0; });
     var html = '<h3>未映射科目（' + un.length + ' 个，其中有余额的 ' + withMoney.length + ' 个）</h3>' +
       '<div class="note warn">这些科目没有归到任何报表项目，所以汇总一定对不上。' +
@@ -559,7 +573,7 @@
     });
     html += '</tbody></table></div>';
     if (un.length > 50) html += '<p class="muted">只列前 50 个，完整的在导出的底稿里。</p>';
-    box.innerHTML = html;
+    box.innerHTML = missHtml + html;
   }
 
   function renderMapPanel() {
@@ -609,6 +623,7 @@
         diffs: state.detailCmp.diffs,
         matched: state.detailCmp.matched,
         onlyDetail: state.detailCmp.onlyDetail,
+        onlyAgg: state.detailCmp.onlyAgg,
         failed: state.detailCmp.failed,
         diffTotalCents: state.detailCmp.diffTotalCents
       } : null
