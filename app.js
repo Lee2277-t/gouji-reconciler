@@ -164,11 +164,11 @@
       state.bs = {
         fileName: res.fileName, wb: res.wb, sheetName: pick.name,
         rows: pick.rows, header: pick.header, parsed: null, level: 'leaf',
-      origin: sheetOrigin(res.wb, pick.name)
+        origin: sheetOrigin(res.wb, pick.name)
       };
       // 面板一直带 hidden，之前没有任何地方移除它，等于换工作表/改表头行/改口径全用不了
       $('bsPanel').classList.remove('hidden');
-      $('bsHeaderRow').value = pick.header.rowIndex + 1;
+      $('bsHeaderRow').value = (state.bs.origin || 0) + pick.header.rowIndex + 1;
       $('bsInfo').textContent = res.fileName + ' · ' + pick.name;
       parseBalance();
       refresh();
@@ -259,7 +259,8 @@
       state.st = {
         fileName: res.fileName, wb: res.wb, sheetName: pick.name,
         rows: pick.rows, header: pick.header, blockIndex: 0, colIndex: 0, parsed: null,
-      origin: sheetOrigin(res.wb, pick.name)
+      origin: sheetOrigin(res.wb, pick.name),
+      wb: res.wb
       };
       $('stInfo').textContent = res.fileName + ' · ' + pick.name;
       $('stPanel').classList.remove('hidden');
@@ -727,25 +728,43 @@
     if (!state.bs) return;
     state.bs.sheetName = $('bsSheet').value;
     state.bs.rows = sheetRows(state.bs.wb, state.bs.sheetName);
+    // 换表后起点会变，origin 必须跟着重算，否则行号整体错位
+    state.bs.origin = sheetOrigin(state.bs.wb, state.bs.sheetName);
     state.bs.header = Core.detectBalanceHeader(state.bs.rows);
-    $('bsHeaderRow').value = state.bs.header.rowIndex + 1;
+    $('bsHeaderRow').value = (state.bs.origin || 0) + state.bs.header.rowIndex + 1;
     parseBalance(); refresh();
   });
 
   $('bsHeaderRow').addEventListener('change', function () {
     if (!state.bs) return;
-    var want = parseInt($('bsHeaderRow').value, 10) - 1;
-    if (!(want >= 0)) return;
-    var h = Core.detectBalanceHeader(state.bs.rows);
-    h.rowIndex = want;
-    state.bs.header = h;
+    var excelRow = parseInt($('bsHeaderRow').value, 10);
+    if (!(excelRow >= 1)) return;
+    // 输入框里是 Excel 的真实行号，换算成数组下标要把表起点减掉
+    var want = excelRow - 1 - (state.bs.origin || 0);
+    if (want < 0) {
+      $('bsHeaderRow').value = (state.bs.origin || 0) + state.bs.header.rowIndex + 1;
+      return;
+    }
+    // 只改行号不够：列映射是按原来那行认的。从指定行重新认一遍列。
+    var sub = state.bs.rows.slice(want);
+    var h = Core.detectBalanceHeader(sub);
+    if (h.rowIndex === 0) {
+      h.rowIndex = want;
+      state.bs.header = h;
+    } else {
+      // 这一行不像表头：至少别静默吞掉前面的数据，明确告诉用户
+      var h2 = Core.detectBalanceHeader(state.bs.rows);
+      h2.rowIndex = want;
+      state.bs.header = h2;
+      $('bsInfo').textContent = '第 ' + excelRow + ' 行看起来不像表头，列是按整表最像表头的那一行认的，请核对下面的识别结果。';
+    }
     parseBalance(); refresh();
   });
 
   $('bsRedetect').addEventListener('click', function () {
     if (!state.bs) return;
     state.bs.header = Core.detectBalanceHeader(state.bs.rows);
-    $('bsHeaderRow').value = state.bs.header.rowIndex + 1;
+    $('bsHeaderRow').value = (state.bs.origin || 0) + state.bs.header.rowIndex + 1;
     parseBalance(); refresh();
   });
 
@@ -872,11 +891,11 @@
 
     state.bs = {
       fileName: '示例-科目余额表.xlsx', wb: wbBs, sheetName: '科目余额表',
-      rows: bs, header: Core.detectBalanceHeader(bs), parsed: null, level: 'leaf'
+      rows: bs, header: Core.detectBalanceHeader(bs), parsed: null, level: 'leaf', origin: 0
     };
     parseBalance();
     $('bsSheet').innerHTML = '<option>科目余额表</option>';
-    $('bsHeaderRow').value = state.bs.header.rowIndex + 1;
+    $('bsHeaderRow').value = (state.bs.origin || 0) + state.bs.header.rowIndex + 1;
 
     state.st = {
       fileName: '示例-试算表.xlsx', wb: wbSt, sheetName: '试算表',

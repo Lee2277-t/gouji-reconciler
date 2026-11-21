@@ -15,7 +15,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.7.4';
+  var VERSION = '0.7.5';
 
   /* ============================================================
    * 一、基础工具
@@ -1078,7 +1078,14 @@
       var row = rows[r] || [];
       var name = str(row[block.itemCol]).trim();
       var excelRow = firstExcelRow + r;
-      if (!name) { continue; }
+      if (!name) {
+        // 有金额、没项目名：不能静默丢，否则这笔钱在底稿里彻底消失
+        var amtNoName = toCents(row[ac.col]);
+        if (amtNoName.cents !== null && amtNoName.cents !== 0) {
+          skipped.push({ srcRow: excelRow, reason: '无项目名', money: true });
+        }
+        continue;
+      }
       // 分区标题（「流动资产：」「流动负债：」）没有金额，跳过
       var parsed = toCents(row[ac.col]);
       if (parsed.cents === null) {

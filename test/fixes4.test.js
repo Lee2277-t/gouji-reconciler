@@ -278,6 +278,31 @@ eq((rec14.onlyAgg || []).length, 0, '0 余额的项目不算「明细表里没�
     const help15 = XLSX.utils.sheet_to_json(written.Sheets['说明'], { header: 1, defval: null });
     ok(help15.some(r => /对方表没读到/.test(String(r[0]))), '说明页要留痕');
   }
+
+console.log('\n[16 对方表：项目名为空但有金额，不能静默丢]');
+const stNoName = [['项目', '金额'], ['货币资金', 1000], ['', 500], ['实收资本', 1000]];
+const hst = Core.detectStatementHeader(stNoName);
+const bst = Core.parseStatementBlock(stNoName, hst, 0, 0, { firstExcelRow: 1 });
+const badNoName = (bst.skipped || []).filter(s => s.money === true);
+eq(badNoName.length, 1, '要报出有一行有金额却没项目名');
+
+console.log('\n[17 表头行输入框按 Excel 真实行号解释]');
+// 表从第 3 行开始，表头在第 3 行；用户填 5 应表示第 5 行是表头
+const rowsShift = [
+  ['', '', '', ''],
+  ['', '', '', ''],
+  ['科目编码', '科目名称', '方向', '期末余额'],
+  ['1002', '银行存款', '借', 1000],
+  ['4001', '实收资本', '贷', 1000]
+];
+const hShift = Core.detectBalanceHeader(rowsShift);
+eq(hShift.rowIndex, 2, '表头在数组第 3 行');
+// 模拟 app 的换算：用户填「第 3 行」, origin=0 → 数组下标 2
+const want = 3 - 1 - 0;
+const subShift = rowsShift.slice(want);
+const hSub = Core.detectBalanceHeader(subShift);
+eq(hSub.rowIndex, 0, '从第 3 行切片后，表头就在切片第 0 行');
+eq(hSub.codeCol, 0, '列也重新认出来了');
   console.log('\n' + '='.repeat(56));
   if (fails.length) {
     console.log('失败 ' + fails.length + ' / ' + count + ' 项：');
