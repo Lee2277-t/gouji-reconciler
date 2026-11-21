@@ -44,7 +44,7 @@ const hw = Core.detectBalanceHeader(weird);
 ok(hw.rowIndex >= 0, '这张表应该能认出表头');
 const pw = Core.parseBalanceRows(weird, hw, { firstExcelRow: 1 });
 ok(pw.accounts.every(a => Core.codePrefix(a.code) !== ''), '编码取不出四位数字的行不能当科目');
-ok(!pw.accounts.some(a => Core.moneyText(a.name) === '没有编码的行' && false), '占位');
+ok(!pw.accounts.some(a => a.name === '没有编码的行'), '没有编码的行不能当科目');
 ok(pw.skipped.some(s => /编码/.test(s.reason)), '没有编码的行要记进跳过清单');
 ok(pw.skipped.some(s => /汇总行/.test(s.reason)), '合计行要跳过');
 const badAmt = pw.accounts.find(a => a.code === '2202');

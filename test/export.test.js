@@ -28,7 +28,10 @@ const box = {
     matched: [{ item: '货币资金', leftCents: 100000000, rightCents: 100000000, accounts: [] }],
     onlyAgg: [{ item: '其他流动资产', cents: 500000 }],
     onlyTarget: [{ item: '其他非流动资产', cents: 6000000 }],
-    diffTotalCents: 5000000
+    diffTotalCents: 5000000,
+    unbalancedCents: 5500000,
+    singleSideAbsCents: 6500000,
+    clean: false
   }
 };
 
@@ -47,8 +50,17 @@ eq(gj[4][2], 300000, '金额以元为单位（分/100）');
 eq(gj[4][3], 250000, '对方表金额');
 eq(gj[4][4], 50000, '差异 = 科目 - 对方');
 eq(gj[5][1], '货币资金', '对上的一项排在后面');
-ok(gj[gj.length - 1][0] === '差异合计', '最后一行是差异合计');
-eq(gj[gj.length - 1][4], 50000, '合计金额');
+// 表末要分三行说清楚：已匹配差异、单边差额、单边绝对值；再来一行结论
+const rowOf = (label) => gj.find(r => r[0] === label);
+const r1 = rowOf('差异合计（已匹配项目）');
+const r2 = rowOf('单边差额（两边对冲后）');
+const r3 = rowOf('单边项目绝对值合计');
+const r4 = rowOf('结论');
+ok(r1 && r2 && r3 && r4, '表末要有差异合计/单边差额/单边绝对值/结论四行');
+eq(r1[4], 50000, '已匹配项目的差异合计');
+eq(r3[4], 65000, '单边项目绝对值合计（50 万 + 600 万 = 650 万元）');
+eq(r2[4], 55000, '单边差额（对冲后）');
+ok(/未勾平/.test(r4[4]), '有单边项目时结论不能写「全部勾平」');
 
 /* 未映射科目 */
 const wm = sheets[1].rows;

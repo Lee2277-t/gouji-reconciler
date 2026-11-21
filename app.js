@@ -89,6 +89,37 @@
     return best;
   }
 
+  /* ================= 失败时清场 ================= */
+
+  /** 读文件失败/认不出表头：把上一步的结果全部清掉，别让人对着旧数字做判断 */
+  function clearAll(msg) {
+    state.bs = null;
+    state.agg = null;
+    state.cmp = null;
+    state.detailCmp = null;
+    $('bsInfo').textContent = msg || '';
+    $('bsSummary').classList.add('hidden');
+    $('bsPanel').classList.add('hidden');
+    $('bsMapTable').classList.add('hidden');
+    $('statsBox').innerHTML = '';
+    $('diffBox').innerHTML = '';
+    $('unmappedBox').innerHTML = '';
+    $('detailBox').innerHTML = '';
+    $('genBtn').disabled = true;
+    $('genInfo').textContent = '';
+  }
+
+  function clearStatement(msg) {
+    state.st = null;
+    state.cmp = null;
+    $('stInfo').textContent = msg || '';
+    $('stSummary').classList.add('hidden');
+    $('stPanel').classList.add('hidden');
+    $('diffBox').innerHTML = '';
+    $('statsBox').innerHTML = '';
+    $('genBtn').disabled = true;
+  }
+
   /* ================= 科目余额表 ================= */
 
   function loadBalanceSheet(file) {
@@ -114,6 +145,8 @@
         fileName: res.fileName, wb: res.wb, sheetName: pick.name,
         rows: pick.rows, header: pick.header, parsed: null, level: 'leaf'
       };
+      // 面板一直带 hidden，之前没有任何地方移除它，等于换工作表/改表头行/改口径全用不了
+      bsPanel.classList.remove('hidden');
       $('bsHeaderRow').value = pick.header.rowIndex + 1;
       parseBalance();
       refresh();
@@ -133,7 +166,7 @@
       leaves: leaves.length,
       bc: bc,
       ic: ic,
-      problems: state.bs.parsed.problems
+      problems: (state.bs.parsed.problems || []).concat(state.bs.header.problems || [])
     };
     renderBsMap();
   }
@@ -155,7 +188,8 @@
 
   function renderBsMap() {
     var t = $('bsMapTable');
-    if (!state.bs || !state.bs.parsed) { t.innerHTML = ''; return; }
+    if (!state.bs || !state.bs.parsed) { t.innerHTML = ''; t.classList.add('hidden'); return; }
+    t.classList.remove('hidden');
     var h = state.bs.header;
     var cols = [];
     [['opening', '期初余额'], ['period', '期间发生额'], ['year', '累计发生额'], ['closing', '期末余额']]
@@ -289,8 +323,18 @@
       return '<option value="' + c.col + '">第 ' + (c.col + 1) + ' 列' +
         (c.label ? ' [' + esc(c.label) + ']' : '') + '</option>';
     }).join('');
-    if (state.dt.colIndex !== null && cols[state.dt.colIndex]) $('dtCol').value = String(state.dt.colIndex);
-    else if (list.length) { state.dt.colIndex = list[0].col; $('dtCol').value = String(list[0].col); }
+    if (state.dt.colIndex !== null && cols[state.dt.colIndex]) {
+      $('dtCol').value = String(state.dt.colIndex);
+    } else if (list.length) {
+      // 默认列不能取"第一个有数字的列"——那张表里第一个数字列往往是序号或账号，
+      // 示例数据就会因此算出 −98 万的假差异。先按表头关键词认，认不出取绝对值最大的列。
+      var kw = list.filter(function (c) { return /金额|余额|账面|价值|余额数|数$/.test(c.label || ''); });
+      var pick = kw.length ? kw[0] : list.reduce(function (a, b) {
+        return Math.abs(b.sample) > Math.abs(a.sample) ? b : a;
+      }, list[0]);
+      state.dt.colIndex = pick.col;
+      $('dtCol').value = String(pick.col);
+    }
   }
 
   function renderDetail() {
@@ -340,11 +384,25 @@
     sum.classList.remove('hidden');
     var bc = s.bc;
     var levelNote = { leaf: '只算末级', top: '只算上级', all: '全部科目' }[state.bs.level] || '只算末级';
+
+    // 一个期末余额都没取到：不能说「借贷平」，那是 0=0 造成的假象
+    if (!bc.conclusive) {
+      sum.className = 'note bad';
+      sum.innerHTML = '认出 <b>' + s.accounts + '</b> 个科目，但<b>一个期末余额都没取到</b>——' +
+        '这张表的金额列没认出来，不能用来勾稽。' +
+        (s.problems && s.problems.length ? '<br>原因：' + esc(s.problems.join('；')) : '') +
+        '<br>请在高级里改「表头所在行」，或确认这张表有没有「期末余额/借方/贷方」这类列。';
+      $('genBtn').disabled = true;
+      return;
+    }
+
     sum.className = 'note ' + (bc.balanced ? 'ok' : 'warn');
     sum.innerHTML = '认出 <b>' + s.accounts + '</b> 个科目（末级 ' + s.leaves + ' 个，' + levelNote + '）' +
       '；借方合计 <b>' + money(bc.debitCents) + '</b>，贷方 <b>' + money(bc.creditCents) + '</b>' +
       (bc.balanced ? '，借贷平' : '，<b>差 ' + money(bc.diffCents) + '</b>') +
       (s.ic.failed ? '；另有 <b>' + s.ic.failed + '</b> 行「期初+本期借-本期贷≠期末」' : '') +
+      (s.ic.inferred ? '；<b>' + s.ic.inferred + '</b> 行期末余额是推算的（这些行不参与恒等式校验）' : '') +
+      (s.problems && s.problems.length ? '；注意：' + esc(s.problems.join('；')) : '') +
       '。';
 
     var accounts = currentAccounts();
@@ -403,9 +461,11 @@
     if (!cmp.diffs.length && !cmp.matched.length) { box.innerHTML = '<p class="muted">没有可比的项目。</p>'; return; }
 
     var html = '<h3>差异（' + cmp.diffs.length + ' 项）</h3>';
-    if (!cmp.diffs.length) {
-      html += '<div class="note ok">所有项目都分毫不差。</div>';
-    } else {
+    if (!cmp.diffs.length && cmp.singleSideCount) {
+      html += '<div class="note warn">已匹配的项目都一致，但还有 ' + cmp.singleSideCount +
+        ' 项只在一边出现（见下）。这不等于勾平——项目名对不上或报表漏行都会这样。</div>';
+    }
+    if (cmp.diffs.length) {
       html += '<div class="scroll"><table class="data"><thead><tr>' +
         '<th>项目</th><th class="num">科目余额表</th><th class="num">对方表</th><th class="num">差异</th><th>构成科目</th>' +
         '</tr></thead><tbody>';
@@ -419,6 +479,8 @@
           }).join('<br>') + ((d.accounts || []).length > 4 ? '<br>…共 ' + d.accounts.length + ' 个' : '') + '</td></tr>';
       });
       html += '</tbody></table></div>';
+    } else if (!cmp.singleSideCount && !(cmp.targetTotals || []).length) {
+      html += '<div class="note ok">所有项目都分毫不差。</div>';
     }
 
     if (cmp.matched.length) {
@@ -445,6 +507,11 @@
         html += '<tr><td>只有对方表有</td><td>' + esc(x.item) + '</td><td class="num">' + money(x.cents) + '</td></tr>';
       });
       html += '</tbody></table></div>';
+    }
+    if ((cmp.targetTotals || []).length) {
+      html += '<p class="hint">报表里的 ' + cmp.targetTotals.length + ' 个合计行（' +
+        cmp.targetTotals.slice(0, 4).map(function (t) { return esc(t.item); }).join('、') +
+        '…）不参与逐项比对。</p>';
     }
     box.innerHTML = html;
   }
@@ -502,7 +569,20 @@
       },
       agg: state.agg,
       cmp: state.cmp,
-      overrides: state.overrides
+      overrides: state.overrides,
+      detail: (state.dt && state.detailCmp) ? {
+        label: state.dt.fileName,
+        col: state.dt.colIndex,
+        colLabel: (function () {
+          var o = $('dtCol').options[$('dtCol').selectedIndex];
+          return o ? o.textContent : '';
+        })(),
+        diffs: state.detailCmp.diffs,
+        matched: state.detailCmp.matched,
+        onlyDetail: state.detailCmp.onlyDetail,
+        failed: state.detailCmp.failed,
+        diffTotalCents: state.detailCmp.diffTotalCents
+      } : null
     };
   }
 
