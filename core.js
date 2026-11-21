@@ -15,7 +15,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.6.0';
+  var VERSION = '0.7.0';
 
   /* ============================================================
    * 一、基础工具
@@ -141,7 +141,8 @@
     ['2231', '应付利息', 'C'], ['2232', '应付股利', 'C'], ['2241', '其他应付款', 'C'],
     ['2401', '递延收益', 'C'],
     ['2501', '长期借款', 'C'], ['2502', '应付债券', 'C'],
-    ['2601', '保险合同准备金', 'C'], ['2602', '保险合同准备金', 'C'],
+    // 2601/2602 只有保险公司才用（未到期责任准备金/保险责任准备金）；
+    // 非保险客户常把 2601 当「长期借款」，硬映射会静默算错，所以故意不内置，让它进未映射清单
     ['2701', '长期应付款', 'C'], ['2702', '长期应付款', 'D', -1],   // 未确认融资费用（减项）
     ['2711', '专项应付款', 'C'],
     ['2801', '预计负债', 'C'], ['2901', '递延所得税负债', 'C'],
@@ -493,8 +494,23 @@
       }
       if (!code || codePrefix(code) === '') {
         // 有名称没编码、或编码里没有四位数字（如「总计」）：是标题/说明行，不是科目
-        skipped.push({ srcRow: excelRow, reason: name ? '无科目编码' : '空行', code: code, name: name });
-        if (name || code) noCodeRows++;
+        // 合计/总计行是故意跳过的，不算「丢了」
+        var isSummaryRow = isTotalLabel(code) || isTotalLabel(name);
+        // 有金额、却没有编码也没有名称：合并单元格展开或辅助核算行，
+        // 这种行不能当空行静默丢掉，否则金额凭空消失
+        var hasMoney = ['opening', 'period', 'year', 'closing'].some(function (g) {
+          var g2 = cols[g] || {};
+          return [g2.amount, g2.debit, g2.credit].some(function (cc) {
+            if (cc === undefined) return false;
+            var n = toCents(row[cc]);
+            return n.cents !== null && n.cents !== 0;
+          });
+        });
+        skipped.push({
+          srcRow: excelRow, code: code, name: name,
+          reason: isSummaryRow ? '汇总行' : (hasMoney ? '缺科目编码和名称' : (name ? '无科目编码' : '空行'))
+        });
+        if (!isSummaryRow && (name || code || hasMoney)) noCodeRows++;
         continue;
       }
 
@@ -581,6 +597,7 @@
       // 注意：只有「确实有期间发生额列」时才敢推算。少了这个条件，
       // 一张只认出期初的表会把期初当期末，而借贷两边同时错、看上去还是平的。
       var closing = closingColumnEmpty ? null : signed('closing');
+      if (closingBad) closing = null;   // 写了文字就是取不到，不能按 0 汇总
       var clRaw = '';
       if (cols.closing && cols.closing.amount !== undefined) clRaw = str(row[cols.closing.amount]).trim();
       var clWritten = clRaw !== '' && toCents(clRaw).cents === null;   // 写了东西但不是数字
@@ -844,10 +861,10 @@
       // 「干净」= 没有差异、没有单边，**并且**没有未映射科目、没有期末读不出的科目。
       // 只看差异和单边，会在有明显缺口时说「全部勾平」——这是最误导人的假结论。
       clean: diffs.length === 0 && onlyAgg.length === 0 && onlyTarget.length === 0
-        && !(agg.unmapped && agg.unmapped.length)
+        && !((agg.unmapped || []).filter(function (u) { return (u.signedCents || 0) !== 0; }).length)
         && !(agg.missing && agg.missing.length),
       gapCount: (onlyAgg.length + onlyTarget.length +
-        ((agg.unmapped && agg.unmapped.length) || 0) +
+        ((agg.unmapped || []).filter(function (u) { return (u.signedCents || 0) !== 0; }).length) +
         ((agg.missing && agg.missing.length) || 0))
     };
   }
@@ -1085,6 +1102,13 @@
    */
   var LEVEL_TEXT = { leaf: '只汇总末级科目', top: '只汇总上级科目', all: '全部科目都算（可能重复计）' };
 
+  function sheetHead(box, title) {
+    return [
+      [title, '', '', '', '被审计单位：' + (box.client || '（未填）'), ''],
+      ['编制日期：' + (box.dateText || '') + ' · 金额单位：元', '', '', '', '', '']
+    ];
+  }
+
   function buildSheets(box) {
     var sheets = [];
 
@@ -1132,11 +1156,18 @@
     var detailBad = box.detail && ((box.detail.diffs && box.detail.diffs.length) || (box.detail.failed && box.detail.failed.length));
     var overallClean = box.cmp && box.cmp.clean && !skippedN && !detailBad;
     var why = [];
-    if (box.cmp && box.cmp.diffs && box.cmp.diffs.length) why.push('项目差异 ' + box.cmp.diffs.length + ' 项');
-    if (box.cmp && box.cmp.singleSideCount) why.push('单边项目 ' + box.cmp.singleSideCount + ' 项');
-    if (box.cmp && box.cmp.gapCount && !(box.cmp.diffs || []).length) why.push('未映射/读不出 ' + box.cmp.gapCount + ' 项');
+    if (box.cmp) {
+      if ((box.cmp.diffs || []).length) why.push('项目差异 ' + box.cmp.diffs.length + ' 项');
+      if (box.cmp.singleSideCount) why.push('单边项目 ' + box.cmp.singleSideCount + ' 项');
+      // 未映射/读不出单独数，不要用 gapCount（它把单边也算进去了，会重复）
+      var unN = ((box.agg && box.agg.unmapped) || []).filter(function (u) { return (u.signedCents || 0) !== 0; }).length;
+      var missN = ((box.agg && box.agg.missing) || []).length;
+      if (unN) why.push('未映射科目 ' + unN + ' 个');
+      if (missN) why.push('期末读不出 ' + missN + ' 个');
+    }
     if (skippedN) why.push('原表有 ' + skippedN + ' 行没有计入');
     if (detailBad) why.push('明细表勾稽有差异');
+    if (box.bs && box.bs.identityFailed) why.push('另有 ' + box.bs.identityFailed + ' 行恒等式不平');
     rows.push(['结论', '', '', '', overallClean ? '全部勾平' : ('未勾平：' + why.join('，')), '']);
     sheets.push({ name: '勾稽表', rows: rows, moneyCols: moneyCols });
 
@@ -1181,7 +1212,10 @@
       dt.push([]);
       dt.push(['差异合计', '', '', ((box.detail.diffTotalCents || 0) / 100), '', '']);
       // 这一页也要有自己的结论，否则上面几页说勾平、这里写着差异，没人知道该信哪个
-      var dClean = !(box.detail.diffs && box.detail.diffs.length) && !(box.detail.failed && box.detail.failed.length);
+      var dClean = !(box.detail.diffs && box.detail.diffs.length)
+        && !(box.detail.failed && box.detail.failed.length)
+        && !(box.detail.onlyDetail && box.detail.onlyDetail.length)
+        && !(box.detail.onlyAgg && box.detail.onlyAgg.length);
       dt.push([]);
       dt.push(['结论', '', '', '', dClean ? '明细表全部勾平'
         : ('未勾平：' + ((box.detail.diffs || []).length) + ' 项差异、' + ((box.detail.failed || []).length) + ' 项单边'), '']);
@@ -1190,6 +1224,7 @@
 
     /* ---- 未映射科目 ---- */
     var un = [];
+    un.push.apply(un, sheetHead(box, '未映射科目'));
     un.push(['未映射科目（这些科目没有归到任何报表项目，必须先指定，否则汇总一定对不上）']);
     un.push(['科目编码', '科目名称', '期末余额', '原始行号']);
     (box.agg ? box.agg.unmapped : []).forEach(function (u) {
@@ -1218,6 +1253,7 @@
 
     /* ---- 单边项目 ---- */
     var one = [];
+    one.push.apply(one, sheetHead(box, '单边项目'));
     one.push(['只在一边出现的项目（要么项目名对不上，要么对方表漏了）']);
     one.push(['方向', '项目', '金额']);
     if (box.cmp) {
@@ -1229,6 +1265,7 @@
 
     /* ---- 说明 ---- */
     var help = [];
+    help.push.apply(help, sheetHead(box, '说明'));
     help.push(['说明', '']);
     help.push(['工具版本', '勾稽助手 v' + VERSION]);
     help.push(['科目余额表', (box.bs && box.bs.label) || '']);
@@ -1261,7 +1298,7 @@
     help.push([]);
     help.push(['口径']);
     help.push(['· 金额一律按「分」整数计算，本表以元展示，保留两位小数。']);
-    help.push(['· 只汇总末级科目，上级科目不重复计入。']);
+    help.push(['· ' + (LEVEL_TEXT[box.level] || LEVEL_TEXT.leaf) + '，上级科目不重复计入。']);
     help.push(['· 备抵科目（累计折旧、减值准备、库存股）已按负向计入对应项目。']);
     help.push(['· 未映射科目不计入任何项目，单独列出——本工具不猜科目归属。']);
     help.push(['· 差异 = 科目余额表汇总 − 对方表。正数=科目侧多，负数=科目侧少。']);

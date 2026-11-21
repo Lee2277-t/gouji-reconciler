@@ -1,0 +1,168 @@
+'use strict';
+/** 第五轮审查的回归：结论计数、合计行、0 余额未映射、文字格、合并单元格、首屏顺序 */
+const path = require('path');
+const fs = require('fs');
+const vm = require('vm');
+const XLSX = require(path.join(__dirname, '..', 'vendor', 'xlsx.full.min.js'));
+const Core = require(path.join(__dirname, '..', 'core.js'));
+
+let count = 0;
+const fails = [];
+function ok(cond, msg) { count++; if (!cond) fails.push(msg); }
+function eq(a, b, msg) {
+  count++;
+  if (JSON.stringify(a) !== JSON.stringify(b)) fails.push(msg + ' — 期望 ' + JSON.stringify(b) + '，实际 ' + JSON.stringify(a));
+}
+
+console.log('\n[1 结论行不能把单边重复计数]');
+const agg = Core.aggregateItems([
+  { code: '1002', name: '银行存款', debitCents: 100000, creditCents: 0 },
+  { code: '9999', name: '自定义科目', debitCents: 50000, creditCents: 0 }
+]);
+const cmp = Core.compareItems(agg, [{ item: '货币资金', cents: 100000 }]);
+const out = Core.buildWorkbook(XLSX, {
+  client: '', dateText: '2026-11-22',
+  bs: { label: 'a', accountCount: 2, leafCount: 2, balanceDiffCents: 0, identityFailed: 0, identityChecked: 2, inferred: 0, missing: 0, skippedRows: 0, level: 'leaf' },
+  target: { label: 'b', blockName: '资产', colLabel: '审计前' },
+  agg: agg, cmp: cmp
+});
+const gj = XLSX.utils.sheet_to_json(out.wb.Sheets['勾稽表'], { header: 1, defval: null });
+const concl = String((gj.find(r => r[0] === '结论') || [])[4] || '');
+ok(/未勾平/.test(concl), '有未映射科目时结论是未勾平');
+ok(!/未映射\/读不出/.test(concl), '不该再用含糊的「未映射/读不出」合计');
+ok(/未映射科目 1 个/.test(concl), '未映射要单独数：' + concl);
+ok(!/单边项目/.test(concl), '这张表没有单边项目，不该出现单边');
+
+console.log('\n[2 合计行不算「有行没计入」]');
+const withTotal = [
+  ['科目编码', '科目名称', '期末余额'],
+  ['1002', '银行存款', 1000],
+  ['4001', '实收资本', -1000],
+  ['', '合计', 0]
+];
+const h2 = Core.detectBalanceHeader(withTotal);
+const p2 = Core.parseBalanceRows(withTotal, h2, { firstExcelRow: 1 });
+eq(p2.problems.length, 0, '合计行不该触发任何警告');
+ok(p2.skipped.some(s => s.reason === '汇总行'), '合计行标记为汇总行');
+eq(p2.skipped.filter(s => s.reason !== '汇总行' && s.reason !== '空行').length, 0, '没有真正丢行');
+
+console.log('\n[3 合并单元格：有金额但没编码名称的行不能静默消失]');
+const merged = [
+  ['科目编码', '科目名称', '期末余额'],
+  ['1122', '应收账款', 100],
+  ['', '', 300]
+];
+const p3 = Core.parseBalanceRows(merged, Core.detectBalanceHeader(merged), { firstExcelRow: 1 });
+ok(p3.problems.some(p => /四位数字/.test(p)), '要报出来');
+ok(p3.skipped.some(s => s.reason === '缺科目编码和名称'), '标记为缺编码名称');
+
+console.log('\n[4 零余额的未映射科目不算缺口]');
+const agg4 = Core.aggregateItems([
+  { code: '1002', name: '银行存款', debitCents: 100000, creditCents: 0 },
+  { code: '9999', name: '停用科目', debitCents: 0, creditCents: 0 }
+]);
+const cmp4 = Core.compareItems(agg4, [{ item: '货币资金', cents: 100000 }]);
+eq(agg4.unmapped.length, 1, '它确实在未映射清单里');
+eq(cmp4.clean, true, '但余额为 0 不该阻止「全部勾平」');
+
+console.log('\n[5 期末借贷格写文字：取不到，不能当 0，也不能重复计数]');
+const txt = [
+  ['科目编码', '科目名称', '期末借方', '期末贷方'],
+  ['1122', '应收账款', '待补', 0],
+  ['4001', '实收资本', 0, 1000]
+];
+const p5 = Core.parseBalanceRows(txt, Core.detectBalanceHeader(txt), { firstExcelRow: 1 });
+eq(p5.accounts[0].closingCents, null, '读不出就是 null');
+const msg = p5.problems.join('；');
+ok(/文字/.test(msg), '要报出来');
+ok(!/2 行/.test(msg), '一行不能报成两行：' + msg);
+
+console.log('\n[6 摘要口径：明细表有差异时首屏差异区不能说「分毫不差」]');
+function makeEl(id) {
+  const h = {};
+  return {
+    id, innerHTML: '', value: '', textContent: '', disabled: false, style: {}, files: null, _h: h,
+    classList: {
+      _s: new Set(),
+      add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); },
+      contains(c) { return this._s.has(c); },
+      toggle(c, f) { if (f === undefined) { this._s.has(c) ? this._s.delete(c) : this._s.add(c); } else if (f) this._s.add(c); else this._s.delete(c); }
+    },
+    addEventListener(t, fn) { (h[t] = h[t] || []).push(fn); },
+    click() { (h.click || []).forEach(fn => fn({ target: this })); },
+    appendChild() {}, setAttribute() {}, querySelector() { return null; }
+  };
+}
+const els = {};
+const doc = {
+  getElementById(id) { return els[id] || (els[id] = makeEl(id)); },
+  body: makeEl('body'), createElement: () => makeEl('x'), addEventListener() {}
+};
+doc.body.classList = makeEl('body').classList;
+const store = {};
+const ls = { getItem(k) { return store[k] === undefined ? null : store[k]; }, setItem(k, v) { store[k] = String(v); }, removeItem(k) { delete store[k]; } };
+let nextPayload = null;
+function FR() { this.onload = null; this.onerror = null; this.result = null; }
+FR.prototype.readAsArrayBuffer = function () {
+  const self = this;
+  setImmediate(() => { self.result = nextPayload; self.onload({ target: { result: nextPayload } }); });
+};
+const sandbox = {
+  window: { localStorage: ls, document: doc }, document: doc, localStorage: ls,
+  XLSX, Core, FileReader: FR, Uint8Array, setImmediate,
+  console, Date, JSON, Math, String, Number, Object, Array, parseInt, parseFloat, isNaN, Promise
+};
+sandbox.window.window = sandbox.window;
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8'), sandbox, { filename: 'app.js' });
+
+function buf(rows, name) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name || 'S');
+  return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }));
+}
+async function load(id, data) {
+  nextPayload = data;
+  const el = doc.getElementById(id);
+  el.files = [{ name: 'x.xlsx' }];
+  (el._h.change || []).forEach(fn => fn({ target: el }));
+  await new Promise(r => setTimeout(r, 70));
+}
+
+(async function () {
+  await load('bsFile', buf([
+    ['科目编码', '科目名称', '期初余额', '本期借方', '本期贷方', '期末余额'],
+    ['1002', '银行存款', 1000, 0, 0, 1000],
+    ['1122', '应收账款', 300, 0, 0, 300],
+    ['4001', '实收资本', 1300, 0, 0, 1300]
+  ]));
+  await load('stFile', buf([
+    ['项目', '期末余额'],
+    ['货币资金', 1000],
+    ['应收账款', 300],
+    ['实收资本', -1300]
+  ]));
+  ok(/分毫不差|全部勾平/.test(doc.getElementById('diffBox').innerHTML), '先确认两边是对上的');
+  ok(!/分毫不差/.test(doc.getElementById('detailBox').innerHTML) || doc.getElementById('detailBox').innerHTML === '',
+    '还没载入明细表时明细区是空的');
+
+  // 再载入一张差 99 万的明细表：首屏差异区必须立刻反映，不能还挂着「分毫不差」
+  // 明细表按「一个项目一张表」组织，工作表名就是项目名
+  await load('dtFile', buf([
+    ['摘要', '金额'],
+    ['甲公司', 629300],
+    ['乙公司', 670000],
+    ['合  计', 1299300]
+  ], '应收账款'));
+  ok(!/分毫不差/.test(doc.getElementById('diffBox').innerHTML),
+    '明细表有差异时，差异区不能说「所有项目都分毫不差」');
+
+  console.log('\n' + '='.repeat(56));
+  if (fails.length) {
+    console.log('失败 ' + fails.length + ' / ' + count + ' 项：');
+    fails.forEach((f, i) => console.log('  ' + (i + 1) + '. ' + f));
+    process.exit(1);
+  }
+  console.log('第五轮修复回归全部通过：' + count + ' 项断言');
+  console.log('='.repeat(56));
+})();

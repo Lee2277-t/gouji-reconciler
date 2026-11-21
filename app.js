@@ -167,8 +167,9 @@
       bc: bc,
       ic: ic,
       // 有内容但没计入科目的行（编码取不出四位数字）：必须进结论，否则金额凭空消失
+      // 合计/总计行是故意不参与的，不能算成「有行没计入」
       skippedRows: (state.bs.parsed.skipped || []).filter(function (r) {
-        return (r.code && Core.str(r.code).trim()) || (r.name && Core.str(r.name).trim());
+        return r.reason !== '汇总行' && r.reason !== '空行';
       }).length,
       problems: (state.bs.parsed.problems || []).concat(state.bs.header.problems || [])
     };
@@ -267,6 +268,8 @@
     if (!state.st) return;
     var r = Core.parseStatementBlock(state.st.rows, state.st.header,
       state.st.blockIndex, state.st.colIndex, { firstExcelRow: 1 });
+    // 试算表里金额读不出、或项目名认不出的行：不能悄悄丢掉，要报到界面上
+    r.badRows = (r.skipped || []).filter(function (s) { return s.reason !== '空行'; });
     state.st.parsed = r;
   }
 
@@ -457,15 +460,20 @@
       ss.classList.remove('hidden');
       ss.className = 'note ok';
       ss.innerHTML = '读到 <b>' + state.st.parsed.items.length + '</b> 个项目（' +
-        esc(state.st.sheetName) + ' · ' + esc(a.name || '') + ' · ' + esc(c.label || '') + '）';
+        esc(state.st.sheetName) + ' · ' + esc(a.name || '') + ' · ' + esc(c.label || '') + '）' +
+        ((state.st.parsed.badRows || []).length
+          ? '<br><b>另有 ' + state.st.parsed.badRows.length + ' 行没有读到金额或项目名，这些行没有参与比对</b>'
+          : '');
     } else {
       state.cmp = null;
     }
 
     renderStats();
+    // 先算明细，再渲染差异：renderDiff 要用刚算出来的 detailCmp，
+    // 否则载入明细表后差异区还挂着上一轮的结论
+    renderDetail();
     renderDiff();
     renderUnmapped();
-    renderDetail();
     renderMapPanel();
     $('genBtn').disabled = !(state.agg && state.cmp);
   }
@@ -499,6 +507,7 @@
     if (!state.cmp) { box.innerHTML = ''; return; }
     var cmp = state.cmp;
     var skippedN = (state.bs.stats && state.bs.stats.skippedRows) || 0;
+    var stBad = (state.st && state.st.parsed && (state.st.parsed.badRows || []).length) || 0;
     var detailBad = state.detailCmp && ((state.detailCmp.diffs || []).length || (state.detailCmp.failed || []).length);
     if (!cmp.diffs.length && !cmp.matched.length && !cmp.singleSideCount) { box.innerHTML = '<p class="muted">没有可比的项目。</p>'; return; }
 
@@ -521,7 +530,7 @@
           }).join('<br>') + ((d.accounts || []).length > 4 ? '<br>…共 ' + d.accounts.length + ' 个' : '') + '</td></tr>';
       });
       html += '</tbody></table></div>';
-    } else if (cmp.clean && !skippedN && !detailBad) {
+    } else if (cmp.clean && !skippedN && !detailBad && !stBad) {
       html += '<div class="note ok">所有项目都分毫不差。</div>';
     }
 
@@ -744,13 +753,22 @@
   $('mapApply').addEventListener('click', function () {
     var text = $('mapText').value || '';
     var map = {};
+    var lost = 0;
     text.split(/\r?\n/).forEach(function (line) {
       var m = /^\s*([0-9A-Za-z]{4,})\s*[=＝:：]\s*(.+?)\s*$/.exec(line);
-      if (m) map[m[1]] = m[2];
+      if (!m) return;
+      // 映射按四位编码归属整组，六位/八位码要归到它的一级科目上，
+      // 否则用户照着「未映射科目」里的完整编码填，会静默不生效
+      var key = Core.codePrefix(m[1]) || m[1];
+      if (key !== m[1]) lost++;
+      map[key] = m[2];
     });
     state.overrides = map;
     try { window.localStorage.setItem(MAP_KEY, JSON.stringify(map)); } catch (e) { /* 忽略 */ }
     refresh();
+    if (lost) {
+      $('mapHint').textContent += '（' + lost + ' 条长编码已归到前四位，映射是按一级科目生效的）';
+    }
   });
 
   $('mapForget').addEventListener('click', function () {

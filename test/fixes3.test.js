@@ -288,6 +288,10 @@ const hsk = Core.detectBalanceHeader(skippedRows);
 const psk = Core.parseBalanceRows(skippedRows, hsk, { firstExcelRow: 1 });
 ok((psk.skipped || []).some(r => (r.name || '') === '其他应收款'), '被跳过的行要能查出来');
 ok(psk.problems.some(p => /四位数字/.test(p)), '要报出有几行没计入');
+// 合计行是故意跳过的，不能算成「有行没计入」
+const withTot = [['科目编码','科目名称','期末余额'],['1002','银行存款',1000],['4001','实收资本',-1000],['','合计',0]];
+const ptot = Core.parseBalanceRows(withTot, Core.detectBalanceHeader(withTot), { firstExcelRow: 1 });
+eq(ptot.problems.length, 0, '合计行不该触发警告');
 
 console.log('\n[14 明细表有差异时，总底稿的结论不能写「全部勾平」]');
 const XLSX2 = require(path.join(__dirname, '..', 'vendor', 'xlsx.full.min.js'));
