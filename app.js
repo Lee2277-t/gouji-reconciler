@@ -269,7 +269,10 @@
     var r = Core.parseStatementBlock(state.st.rows, state.st.header,
       state.st.blockIndex, state.st.colIndex, { firstExcelRow: 1 });
     // 试算表里金额读不出、或项目名认不出的行：不能悄悄丢掉，要报到界面上
-    r.badRows = (r.skipped || []).filter(function (s) { return s.reason !== '空行'; });
+    // 空行和分区标题（「流动资产：」这种）本来就不该有金额，不是坏行
+    r.badRows = (r.skipped || []).filter(function (s) {
+      return s.reason !== '空行' && s.reason !== '分区标题';
+    });
     state.st.parsed = r;
   }
 

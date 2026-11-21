@@ -15,7 +15,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.7.0';
+  var VERSION = '0.7.1';
 
   /* ============================================================
    * 一、基础工具
@@ -508,9 +508,12 @@
         });
         skipped.push({
           srcRow: excelRow, code: code, name: name,
-          reason: isSummaryRow ? '汇总行' : (hasMoney ? '缺科目编码和名称' : (name ? '无科目编码' : '空行'))
+          reason: isSummaryRow ? '汇总行'
+            : (hasMoney ? '缺科目编码和名称'
+              : ((code || name) ? '无科目编码' : '空行'))
         });
-        if (!isSummaryRow && (name || code || hasMoney)) noCodeRows++;
+        // 只有带金额的行才会让合计对不上，没有金额的行（续表、分隔）不报
+        if (!isSummaryRow && hasMoney) noCodeRows++;
         continue;
       }
 
@@ -577,7 +580,7 @@
         var rawp = str(row[cc]).trim();
         if (rawp !== '' && toCents(rawp).cents === null) periodBad = true;
       });
-      if (periodBad) badClosing++;
+      if (periodBad) badClosing++;  // 发生额写文字算一次
 
       // 期末的借/贷格写文字，同样不能当 0
       var closingBad = false;
@@ -589,7 +592,7 @@
         var cc2 = toCents(rawc);
         if (cc2.cents === null && !cc2.text) closingBad = true;
       });
-      if (closingBad) badClosing++;
+      // 期末写文字在下面统一计数，这里不要再加一次
       var yDr = centsAt('year', 'debit', row);
       var yCr = centsAt('year', 'credit', row);
 
@@ -597,7 +600,7 @@
       // 注意：只有「确实有期间发生额列」时才敢推算。少了这个条件，
       // 一张只认出期初的表会把期初当期末，而借贷两边同时错、看上去还是平的。
       var closing = closingColumnEmpty ? null : signed('closing');
-      if (closingBad) closing = null;   // 写了文字就是取不到，不能按 0 汇总
+      if (closingBad) { closing = null; badClosing++; }   // 写了文字就是取不到，不能按 0 汇总
       var clRaw = '';
       if (cols.closing && cols.closing.amount !== undefined) clRaw = str(row[cols.closing.amount]).trim();
       var clWritten = clRaw !== '' && toCents(clRaw).cents === null;   // 写了东西但不是数字
@@ -1153,7 +1156,11 @@
     // 总结论要把「被跳过的行」「明细表这一级」也算进去，否则分工表说勾平、
     // 同一本底稿的明细表页却写着差异 10,000，自相矛盾
     var skippedN = (box.bs && box.bs.skippedRows) || 0;
-    var detailBad = box.detail && ((box.detail.diffs && box.detail.diffs.length) || (box.detail.failed && box.detail.failed.length));
+    var detailBad = box.detail && (
+      (box.detail.diffs && box.detail.diffs.length) ||
+      (box.detail.failed && box.detail.failed.length) ||
+      (box.detail.onlyDetail && box.detail.onlyDetail.length) ||
+      (box.detail.onlyAgg && box.detail.onlyAgg.length));
     var overallClean = box.cmp && box.cmp.clean && !skippedN && !detailBad;
     var why = [];
     if (box.cmp) {
@@ -1168,13 +1175,17 @@
     if (skippedN) why.push('原表有 ' + skippedN + ' 行没有计入');
     if (detailBad) why.push('明细表勾稽有差异');
     if (box.bs && box.bs.identityFailed) why.push('另有 ' + box.bs.identityFailed + ' 行恒等式不平');
-    rows.push(['结论', '', '', '', overallClean ? '全部勾平' : ('未勾平：' + why.join('，')), '']);
+    var conclText = overallClean ? '全部勾平' : ('未勾平：' + why.join('，'));
+    if (overallClean && box.bs && box.bs.identityFailed) {
+      conclText += '（另有 ' + box.bs.identityFailed + ' 行恒等式不平，见说明页）';
+    }
+    rows.push(['结论', '', '', '', conclText, '']);
     sheets.push({ name: '勾稽表', rows: rows, moneyCols: moneyCols });
 
     /* ---- 明细表（三级勾稽） ---- */
     if (box.detail) {
       var dt = [];
-      dt.push(['明细表 ↔ 科目余额表 勾稽表', '', '', '', '', '']);
+      dt.push.apply(dt, sheetHead(box, '明细表 ↔ 科目余额表 勾稽表'));
       dt.push(['明细表', (box.detail.label || '') ]);
       dt.push(['取数列', box.detail.colLabel || ('第 ' + ((box.detail.col || 0) + 1) + ' 列')]);
       dt.push([]);
@@ -1218,7 +1229,8 @@
         && !(box.detail.onlyAgg && box.detail.onlyAgg.length);
       dt.push([]);
       dt.push(['结论', '', '', '', dClean ? '明细表全部勾平'
-        : ('未勾平：' + ((box.detail.diffs || []).length) + ' 项差异、' + ((box.detail.failed || []).length) + ' 项单边'), '']);
+        : ('未勾平：' + ((box.detail.diffs || []).length) + ' 项差异、' + ((box.detail.failed || []).length) + ' 项取不到金额、' +
+          ((box.detail.onlyAgg || []).length) + ' 项明细表里没有、' + ((box.detail.onlyDetail || []).length) + ' 项科目余额表里没有'), '']);
       sheets.push({ name: '明细表勾稽', rows: dt, moneyCols: dtMoney });
     }
 

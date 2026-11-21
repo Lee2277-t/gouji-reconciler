@@ -157,6 +157,48 @@ async function load(id, data) {
   ok(!/分毫不差/.test(doc.getElementById('diffBox').innerHTML),
     '明细表有差异时，差异区不能说「所有项目都分毫不差」');
 
+
+console.log('\n[7 试算表分区标题不算坏行]');
+const stSec = [
+  ['项目', '期末余额'],
+  ['流动资产：', ''],
+  ['货币资金', 1000],
+  ['流动负债：', ''],
+  ['实收资本', -1000]
+];
+const hsec = Core.detectStatementHeader(stSec);
+const bsec = Core.parseStatementBlock(stSec, hsec, 0, 0, { firstExcelRow: 1 });
+const secBad = (bsec.skipped || []).filter(s => s.reason !== '空行' && s.reason !== '分区标题');
+eq(secBad.length, 0, '「流动资产：」这种分区标题不该算坏行');
+eq(bsec.items.length, 2, '两个项目都读到了');
+
+console.log('\n[8 没有金额的行不报警（续表/分隔不影响合计）]');
+const noMoney = [
+  ['科目编码', '科目名称', '期末余额'],
+  ['1002', '银行存款', 1000],
+  ['—', '续表', ''],
+  ['4001', '实收资本', -1000]
+];
+const pnm = Core.parseBalanceRows(noMoney, Core.detectBalanceHeader(noMoney), { firstExcelRow: 1 });
+eq(pnm.problems.length, 0, '没有金额的行不报警');
+
+console.log('\n[9 明细页与主表结论不能互相矛盾]');
+const out9 = Core.buildWorkbook(XLSX, {
+  client: '某公司', dateText: '2026-11-22',
+  bs: { label: 'a', accountCount: 2, leafCount: 2, balanceDiffCents: 0, identityFailed: 0, identityChecked: 2, inferred: 0, missing: 0, skippedRows: 0, level: 'leaf' },
+  target: { label: 'b', blockName: '资产', colLabel: '审计前' },
+  agg: { items: [], unmapped: [], missing: [] },
+  cmp: { diffs: [], matched: [], onlyAgg: [], onlyTarget: [], targetTotals: [], diffTotalCents: 0, unbalancedCents: 0, singleSideAbsCents: 0, singleSideCount: 0, clean: true, gapCount: 0 },
+  detail: { diffs: [], matched: [], failed: [], onlyDetail: [], onlyAgg: [{ item: '应收账款', cents: 100 }] }
+});
+const gj9 = XLSX.utils.sheet_to_json(out9.wb.Sheets['勾稽表'], { header: 1, defval: null });
+const c9 = String((gj9.find(r => r[0] === '结论') || [])[4] || '');
+const dt9 = XLSX.utils.sheet_to_json(out9.wb.Sheets['明细表勾稽'], { header: 1, defval: null });
+const c9d = String((dt9.find(r => r[0] === '结论') || [])[4] || '');
+ok(/未勾平/.test(c9), '明细表里缺项目时，主表结论不能写全部勾平');
+ok(/未勾平/.test(c9d), '明细页结论也要说未勾平');
+ok(!/全部勾平/.test(c9) && !/明细表全部勾平/.test(c9d), '两页不能一边说勾平一边不勾平');
+ok(/被审计单位/.test(JSON.stringify(dt9[0])), '明细表勾稽页也要有抬头');
   console.log('\n' + '='.repeat(56));
   if (fails.length) {
     console.log('失败 ' + fails.length + ' / ' + count + ' 项：');
