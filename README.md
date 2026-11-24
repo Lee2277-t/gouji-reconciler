@@ -6,6 +6,8 @@
 
 ![勾稽助手界面](docs/preview.png)
 
+**不想下载？** [在线试用](https://lee2277-t.github.io/awesome-lee2277/tools/gouji/)（同一份代码，纯前端，文件只在浏览器里读）
+
 **不想读文档？** [下载最新版 ZIP](../../releases/latest) → 解压 → 双击 index.html，就这样。仓库里也有 index.html，直接打开同样是完整功能。
 ---
 
