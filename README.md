@@ -4,6 +4,9 @@
 
 双击 `index.html` 就能用。不用装软件、不联网，客户数据不出你这台电脑。
 
+![勾稽助手界面](docs/preview.png)
+
+**不想读文档？** [下载最新版 ZIP](../../releases/latest) → 解压 → 双击 index.html，就这样。仓库里也有 index.html，直接打开同样是完整功能。
 ---
 
 ## 为什么需要它
@@ -168,3 +171,7 @@ test/                   回归测试
 ## 许可
 
 AGPL-3.0。可自由使用、修改、分发；改动后的版本需同样开源。
+
+---
+
+更多离线小工具（审计、文档、系统）见 [awesome-lee2277](https://github.com/Lee2277-t/awesome-lee2277)。
